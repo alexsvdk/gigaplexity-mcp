@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "gigaplexity",
-    description="GigaChat-powered web search — ask, research, and reason",
+    instructions="GigaChat-powered web search — ask, research, and reason",
 )
 
 _client: GigaChatClient | None = None

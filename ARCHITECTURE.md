@@ -107,10 +107,10 @@ FastMCP server exposing three tools:
 
 ```bash
 # Via uvx (recommended for MCP)
-uvx --from git+https://github.com/USER/gigaplexity-mcp gigaplexity-mcp
+uvx --from git+https://github.com/alexsvdk/gigaplexity-mcp gigaplexity-mcp
 
 # Via pip
-pip install git+https://github.com/USER/gigaplexity-mcp
+pip install git+https://github.com/alexsvdk/gigaplexity-mcp
 ```
 
 ## MCP Configuration
@@ -120,7 +120,7 @@ pip install git+https://github.com/USER/gigaplexity-mcp
   "mcpServers": {
     "gigaplexity": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/USER/gigaplexity-mcp", "gigaplexity-mcp"],
+      "args": ["--from", "git+https://github.com/alexsvdk/gigaplexity-mcp", "gigaplexity-mcp"],
       "env": {
         "GIGACHAT_SM_SESS": "your-jwt-token",
         "GIGACHAT_USER_ID": "your-user-id",

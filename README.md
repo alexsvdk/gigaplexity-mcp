@@ -19,23 +19,40 @@ Think of it as your own Perplexity-like search, accessible from any MCP-compatib
 
 ### 1. Get GigaChat Credentials
 
-1. Log into [giga.chat](https://giga.chat) in your browser
-2. Open DevTools → Application → Cookies
-3. Copy the values of: `_sm_sess`, `_sm_user_id`
-4. From any API request headers, copy: `x-project-id`
+You need three values from your browser. Log into [giga.chat](https://giga.chat) and open **DevTools** (F12).
+
+#### `GIGACHAT_COOKIES` — full cookie string
+
+1. Go to **Network** tab
+2. Send any message in the chat
+3. Find the request to `https://giga.chat/api/giga-back-web/api/v0/sessions/request`
+4. In the **Headers** tab, find the `Cookie` request header
+5. Copy the **entire** value — it looks like `_sm_sess=eyJ...; _sm_user_id=2a4a...; sticky_cookie_dp=...; ...`
+
+> **Tip:** The `_sm_sess` JWT token expires every ~5 minutes, but GigaChat auto-refreshes it. The full cookie string from a recent browser session usually works for a while.
+
+#### `GIGACHAT_PROJECT_ID` — project UUID
+
+1. In the same request to `sessions/request`, look at the **Request Headers** section
+2. Find the `x-project-id` header — it's a UUID like `7a5f6b67-4f5d-4614-b9b9-656443ccea65`
+
+#### `GIGACHAT_USER_ID` — user UUID
+
+1. In the same request headers, find `x-sm-user-id` — a UUID like `2a4ac401-2e98-4ae7-ad43-b0c4934effbe`
+2. Alternatively, check the `_sm_user_id` cookie in **Application → Cookies → giga.chat**
 
 ### 2. Configure MCP Client
 
-Add to your MCP client configuration:
+Add to your MCP client configuration (Claude Desktop, VS Code, etc.):
 
 ```json
 {
   "mcpServers": {
     "gigaplexity": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/a1exs/gigaplexity-mcp", "gigaplexity-mcp"],
+      "args": ["--from", "git+https://github.com/alexsvdk/gigaplexity-mcp", "gigaplexity-mcp"],
       "env": {
-        "GIGACHAT_SM_SESS": "your-jwt-token-here",
+        "GIGACHAT_COOKIES": "_sm_sess=eyJ...; _sm_user_id=2a4a...; sticky_cookie_dp=...",
         "GIGACHAT_USER_ID": "your-user-uuid",
         "GIGACHAT_PROJECT_ID": "your-project-uuid"
       }
@@ -54,37 +71,41 @@ Ask your MCP client to use the gigaplexity tools:
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GIGACHAT_SM_SESS` | ✅ | JWT session token (`_sm_sess` cookie) |
-| `GIGACHAT_USER_ID` | ✅ | User UUID (`_sm_user_id` cookie) |
-| `GIGACHAT_PROJECT_ID` | ✅ | Project UUID (`x-project-id` header) |
-| `GIGACHAT_COOKIES` | ❌ | Full cookie string (overrides individual cookies) |
-| `GIGACHAT_USER_AGENT` | ❌ | Browser User-Agent string |
-| `GIGACHAT_BASE_URL` | ❌ | API base URL (default: `https://giga.chat`) |
-| `GIGACHAT_APP_VERSION` | ❌ | App version (default: `0.94.4`) |
-| `GIGACHAT_LANGUAGE` | ❌ | Language preference (default: `en`) |
-| `GIGACHAT_TIMEZONE` | ❌ | Timezone (default: `UTC`) |
+| Variable | Required | Description | Where to find |
+|----------|----------|-------------|---------------|
+| `GIGACHAT_COOKIES` | ✅* | Full cookie string | Network tab → `sessions/request` → `Cookie` header |
+| `GIGACHAT_USER_ID` | ✅ | User UUID | Request header `x-sm-user-id` or cookie `_sm_user_id` |
+| `GIGACHAT_PROJECT_ID` | ✅ | Project UUID | Request header `x-project-id` |
+| `GIGACHAT_SM_SESS` | ✅* | JWT token (if not using COOKIES) | Cookie `_sm_sess` in Application → Cookies |
+| `GIGACHAT_USER_AGENT` | ❌ | Browser User-Agent | Auto-set to Safari; change if requests are blocked |
+| `GIGACHAT_BASE_URL` | ❌ | API base URL (default: `https://giga.chat`) | — |
+| `GIGACHAT_APP_VERSION` | ❌ | App version (default: `0.94.4`) | — |
+| `GIGACHAT_LANGUAGE` | ❌ | Language preference (default: `en`) | — |
+| `GIGACHAT_TIMEZONE` | ❌ | Timezone (default: `UTC`) | — |
+
+\* Either `GIGACHAT_COOKIES` (recommended) or `GIGACHAT_SM_SESS` is required. `GIGACHAT_COOKIES` takes priority.
 
 ## Development
 
 ```bash
 # Clone
-git clone https://github.com/a1exs/gigaplexity-mcp
+git clone https://github.com/alexsvdk/gigaplexity-mcp
 cd gigaplexity-mcp
 
 # Set up environment
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[test]"
+pip install -e .
+pip install pytest pytest-asyncio
 
 # Run unit tests
 pytest
 
 # Run integration tests (requires credentials)
-export GIGACHAT_SM_SESS="..."
+export GIGACHAT_COOKIES="..."
 export GIGACHAT_USER_ID="..."
 export GIGACHAT_PROJECT_ID="..."
+export GIGACHAT_SM_SESS="..."
 pytest -m integration -s
 ```
 

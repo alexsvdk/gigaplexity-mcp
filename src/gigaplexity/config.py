@@ -27,8 +27,8 @@ class GigaplexitySettings(BaseSettings):
 
     model_config = {"env_prefix": "GIGACHAT_"}
 
-    # Required
-    sm_sess: str
+    # Required (sm_sess optional if cookies is set)
+    sm_sess: str | None = None
     user_id: str
     project_id: str
 
@@ -52,6 +52,11 @@ class GigaplexitySettings(BaseSettings):
         """Build the full cookie header value."""
         if self.cookies:
             return self.cookies
+
+        if not self.sm_sess:
+            raise ValueError(
+                "Either GIGACHAT_COOKIES or GIGACHAT_SM_SESS must be set"
+            )
 
         parts = [
             f"_sm_sess={self.sm_sess}",
