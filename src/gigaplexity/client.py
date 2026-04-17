@@ -4,27 +4,50 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import uuid
+from pathlib import Path
+from urllib.parse import quote
 
 import httpx
-from httpx_sse import aconnect_sse
 
 from gigaplexity.config import GigaplexitySettings
 from gigaplexity.models import (
+    AttachmentInfo,
     Citation,
+    FileCategory,
     ReasoningStep,
     SearchMode,
     SearchResult,
     build_request_payload,
+    resolve_file_type,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_audio_duration(path: Path) -> float | None:
+    """Try to determine audio duration in seconds (best-effort for WAV)."""
+    import struct
+    import wave
+
+    try:
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if rate > 0:
+                return frames / rate
+    except Exception:
+        pass
+    return None
 
 
 class GigaChatError(Exception):
     """Raised when the GigaChat API returns an error."""
 
 REQUEST_ENDPOINT = "/api/giga-back-web/api/v0/sessions/request"
+OTR_ENDPOINT = "/api/attachments/api/v0/gc/otr"
+UPLOAD_ENDPOINT = "/api/attachments-upload/api/v0/gc/otr"
 DEFAULT_TIMEOUT = 120.0
 
 
@@ -55,6 +78,132 @@ class GigaChatClient:
     def _new_session_id(self) -> str:
         return str(uuid.uuid4())
 
+    async def _create_otr(self, file_type: str) -> dict:
+        """Create an OTR (one-time record) for a file upload.
+
+        Returns dict with ``otrId`` and ``rootId``.
+        """
+        http = await self._get_http()
+        request_id = self._new_request_id()
+        headers = self.settings.build_headers(request_id)
+        headers["Accept"] = "application/json, text/plain, */*"
+        headers["Content-Type"] = "application/json"
+
+        resp = await http.post(
+            OTR_ENDPOINT,
+            json={"fileType": file_type},
+            headers=headers,
+        )
+        if resp.status_code != 201:
+            raise GigaChatError(
+                f"Failed to create OTR (HTTP {resp.status_code}): {resp.text[:300]}"
+            )
+        return resp.json()
+
+    async def _upload_file(
+        self,
+        otr_id: str,
+        file_path: Path,
+        mime_type: str,
+    ) -> dict:
+        """Upload a file to an existing OTR slot.
+
+        Returns dict with ``attachmentId``, ``key``, ``hash``, etc.
+        """
+        http = await self._get_http()
+        request_id = self._new_request_id()
+        headers = self.settings.build_headers(request_id)
+        headers["Accept"] = "application/json, text/plain, */*"
+        # Remove JSON content-type — httpx will set multipart
+        headers.pop("Content-Type", None)
+
+        file_size = file_path.stat().st_size
+        headers["x-file-size"] = str(file_size)
+        headers["x-file-type"] = mime_type
+        headers["x-file-name"] = quote(file_path.name)
+        headers["requestid"] = str(uuid.uuid4())
+
+        # The browser sends a random UUID + extension (no dot) as filename
+        ext = file_path.suffix.lstrip(".")
+        upload_filename = f"{uuid.uuid4()}{ext}"
+
+        with open(file_path, "rb") as f:
+            files = {"file": (upload_filename, f, "application/octet-stream")}
+            resp = await http.post(
+                f"{UPLOAD_ENDPOINT}/{otr_id}",
+                files=files,
+                headers=headers,
+            )
+
+        if resp.status_code != 201:
+            raise GigaChatError(
+                f"Failed to upload file (HTTP {resp.status_code}): {resp.text[:300]}"
+            )
+        return resp.json()
+
+    async def upload_files(self, file_paths: list[str]) -> list[AttachmentInfo]:
+        """Upload files and return attachment metadata for use in a search request.
+
+        All files must belong to the same category (DOC, IMAGE, or AUDIO).
+
+        Raises:
+            ValueError: If files span multiple categories or extension is unsupported.
+            GigaChatError: On API errors.
+        """
+        if not file_paths:
+            return []
+
+        infos: list[AttachmentInfo] = []
+        categories: set[FileCategory] = set()
+
+        for fp in file_paths:
+            path = Path(fp)
+            if not path.is_file():
+                raise ValueError(f"File not found: {fp}")
+            ext = path.suffix.lstrip(".")
+            if not ext:
+                raise ValueError(f"Cannot determine file type (no extension): {fp}")
+            _, cat = resolve_file_type(ext)
+            categories.add(cat)
+
+        if len(categories) > 1:
+            raise ValueError(
+                f"All files must be of the same category. "
+                f"Got mixed categories: {', '.join(c.value for c in categories)}. "
+                f"GigaChat only allows files of one type per request "
+                f"(e.g. only documents, only images, or only audio)."
+            )
+
+        for fp in file_paths:
+            path = Path(fp)
+            ext = path.suffix.lstrip(".")
+            file_type, category = resolve_file_type(ext)
+
+            mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+            otr = await self._create_otr(file_type)
+            otr_id = otr["otrId"]
+            logger.debug("Created OTR %s for %s (%s)", otr_id, path.name, file_type)
+
+            upload_resp = await self._upload_file(otr_id, path, mime_type)
+            logger.debug("Uploaded %s → %s", path.name, upload_resp.get("key"))
+
+            # For audio files, try to read duration
+            audio_duration: float | None = None
+            if category == FileCategory.AUDIO:
+                audio_duration = _get_audio_duration(path)
+
+            infos.append(
+                AttachmentInfo(
+                    hash=upload_resp["hash"],
+                    key=upload_resp["key"],
+                    category=category,
+                    audio_duration=audio_duration,
+                )
+            )
+
+        return infos
+
     async def search(
         self,
         query: str,
@@ -63,6 +212,7 @@ class GigaChatClient:
         domains: list[str] | None = None,
         extended_research: bool = False,
         tone: str = "",
+        attachments: list[AttachmentInfo] | None = None,
     ) -> SearchResult:
         """Execute a search query and return aggregated results."""
         session_id = self._new_session_id()
@@ -75,6 +225,7 @@ class GigaChatClient:
             domains=domains,
             extended_research=extended_research,
             tone=tone,
+            attachments=attachments,
         )
 
         logger.debug("Sending %s request: %s", mode.value, query[:80])

@@ -1,11 +1,16 @@
 """Unit tests for data models."""
 
+import pytest
+
 from gigaplexity.models import (
+    AttachmentInfo,
     Citation,
+    FileCategory,
     ReasoningStep,
     SearchMode,
     SearchResult,
     build_request_payload,
+    resolve_file_type,
 )
 
 
@@ -93,3 +98,87 @@ class TestSearchResult:
         assert "Research Log" in md
         assert "Searching..." in md
         assert "Research report" in md
+
+
+class TestResolveFileType:
+    @pytest.mark.parametrize(
+        "ext, expected_type, expected_cat",
+        [
+            ("pdf", "PDF", FileCategory.DOC),
+            ("docx", "WORD", FileCategory.DOC),
+            ("doc", "WORD", FileCategory.DOC),
+            ("pptx", "PPTX", FileCategory.DOC),
+            ("xlsx", "SPREADSHEET", FileCategory.DOC),
+            ("epub", "EPUB", FileCategory.DOC),
+            ("py", "TEXT", FileCategory.DOC),
+            ("txt", "TEXT", FileCategory.DOC),
+            ("json", "TEXT", FileCategory.DOC),
+            ("jpg", "IMAGE", FileCategory.IMAGE),
+            ("jpeg", "IMAGE", FileCategory.IMAGE),
+            ("png", "IMAGE", FileCategory.IMAGE),
+            ("webp", "IMAGE", FileCategory.IMAGE),
+            ("mp3", "AUDIO", FileCategory.AUDIO),
+            ("wav", "AUDIO", FileCategory.AUDIO),
+            ("ogg", "AUDIO", FileCategory.AUDIO),
+        ],
+    )
+    def test_known_extensions(self, ext, expected_type, expected_cat):
+        ftype, cat = resolve_file_type(ext)
+        assert ftype == expected_type
+        assert cat == expected_cat
+
+    def test_dot_prefix_stripped(self):
+        ftype, cat = resolve_file_type(".pdf")
+        assert ftype == "PDF"
+
+    def test_case_insensitive(self):
+        ftype, cat = resolve_file_type("PDF")
+        assert ftype == "PDF"
+
+    def test_unknown_extension_raises(self):
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            resolve_file_type("xyz123")
+
+
+class TestAttachmentInfo:
+    def test_to_payload_no_audio(self):
+        info = AttachmentInfo(
+            hash="abc123",
+            key="user/file.pdf",
+            category=FileCategory.DOC,
+        )
+        assert info.to_payload() == {
+            "hash": "abc123",
+            "path": "user/file.pdf",
+            "source": "ATTACHMENTS",
+            "audio": None,
+        }
+
+    def test_to_payload_with_audio(self):
+        info = AttachmentInfo(
+            hash="def456",
+            key="user/file.wav",
+            category=FileCategory.AUDIO,
+            audio_duration=20.58,
+        )
+        payload = info.to_payload()
+        assert payload["audio"] == {"duration": 20.58}
+
+
+class TestBuildRequestPayloadWithAttachments:
+    def test_payload_includes_files(self):
+        attachments = [
+            AttachmentInfo(hash="h1", key="k1.pdf", category=FileCategory.DOC),
+            AttachmentInfo(hash="h2", key="k2.pdf", category=FileCategory.DOC),
+        ]
+        payload = build_request_payload(
+            "analyze these", SearchMode.ASK, "sess-1", attachments=attachments
+        )
+        assert "files" in payload
+        assert len(payload["files"]) == 2
+        assert payload["files"][0]["hash"] == "h1"
+        assert payload["files"][0]["source"] == "ATTACHMENTS"
+
+    def test_payload_no_files_when_none(self):
+        payload = build_request_payload("hi", SearchMode.ASK, "sess-2")
+        assert "files" not in payload

@@ -21,6 +21,49 @@ GigaChat uses a REST + SSE (Server-Sent Events) API:
 | Research | `9384a8fd-39e0-4da9-9bc4-da143487449f` | GigaChat-3-Ultra | Deep multi-step research |
 | Reason | `7101c625-42ab-45fe-b168-323970c12eba` | GigaChat-2-Reasoning | Step-by-step reasoning |
 
+### File Attachments
+
+Files can be attached to `ask` queries via a two-step upload flow:
+
+#### Upload Flow
+
+1. **Create OTR** (one-time record):
+   - `POST /api/attachments/api/v0/gc/otr` with `{"fileType": "<TYPE>"}` (e.g. `"PDF"`, `"IMAGE"`, `"AUDIO"`)
+   - Returns `{"otrId": "...", "rootId": "..."}`
+
+2. **Upload file**:
+   - `POST /api/attachments-upload/api/v0/gc/otr/{otrId}` as `multipart/form-data`
+   - Custom headers: `x-file-size`, `x-file-type` (MIME), `x-file-name` (URL-encoded), `requestid` (UUID)
+   - Form field: `file` with randomized filename (`{uuid}{ext}`, no dot) and `application/octet-stream` content type
+   - Returns `{"attachmentId": "...", "key": "...", "hash": "..."}`
+
+3. **Send with query**: Include uploaded files in the session request payload:
+   ```json
+   {
+     "text": "What is this file about?",
+     "agent": "...",
+     "sessionId": "...",
+     "files": [
+       {
+         "hash": "<from upload response>",
+         "path": "<key from upload response>",
+         "source": "ATTACHMENTS",
+         "audio": null | {"duration": <seconds>}
+       }
+     ]
+   }
+   ```
+
+#### File Categories
+
+All files in a single request must belong to the **same category** (server restriction):
+
+| Category | OTR fileType | Extensions |
+|----------|-------------|------------|
+| DOC | `PDF`, `WORD`, `PPTX`, `SPREADSHEET`, `EPUB`, `TEXT` | pdf, docx, doc, pptx, xlsx, txt, py, js, html, etc. |
+| IMAGE | `IMAGE` | jpg, jpeg, png, webp, heic, heif, bmp |
+| AUDIO | `AUDIO` | mp3, aac, m4a, opus, wav, ogg |
+
 ## Project Structure
 
 ```
@@ -64,6 +107,9 @@ Pydantic models for:
 - `SSEEvent` — Parsed SSE event
 - `SearchResult` — Aggregated response with text + citations
 - `Citation` — Source reference (title, URL)
+- `FileCategory` — Enum for attachment categories (DOC, IMAGE, AUDIO)
+- `AttachmentInfo` — Uploaded file metadata (hash, key, category)
+- `resolve_file_type()` — Maps file extensions to OTR type + category
 
 ### 3. `client.py` — GigaChat Client
 
@@ -72,12 +118,13 @@ HTTP client using `httpx` with SSE streaming:
 - Sends requests with proper headers/cookies
 - Parses SSE stream and aggregates response
 - Handles keep-alive and error events
+- **Uploads file attachments** (OTR creation + multipart upload)
 - Returns structured `SearchResult`
 
 ### 4. `server.py` — MCP Server
 
 FastMCP server exposing three tools:
-- `ask(query: str)` — Quick web search with citations
+- `ask(query: str, file_paths: list[str] | None)` — Quick web search with citations, optionally with file attachments
 - `research(query: str, domains: list[str], extended: bool)` — Deep research
 - `reason(query: str)` — Reasoning with web search
 

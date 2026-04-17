@@ -14,6 +14,82 @@ class SearchMode(str, Enum):
     REASON = "reason"
 
 
+class FileCategory(str, Enum):
+    """Attachment category — server only allows files of one category per request."""
+
+    DOC = "DOC"
+    IMAGE = "IMAGE"
+    AUDIO = "AUDIO"
+
+
+# Extension → (otr fileType, category)
+_EXT_MAP: dict[str, tuple[str, FileCategory]] = {}
+
+_DOC_TYPES: dict[str, list[str]] = {
+    "PDF": ["pdf"],
+    "WORD": ["doc", "docx", "html"],
+    "PPTX": ["pptx", "ppt"],
+    "SPREADSHEET": ["xlsx", "xls", "ods"],
+    "EPUB": ["epub"],
+    "TEXT": [
+        "txt", "csv", "log", "md", "json", "xml", "yaml", "yml",
+        "py", "js", "ts", "java", "c", "cpp", "cxx", "c++", "h", "hpp",
+        "cs", "go", "rs", "rb", "php", "swift", "kt", "kts", "scala", "sc",
+        "r", "jl", "lua", "pl", "pm", "sh", "bash", "zsh", "fish",
+        "ps1", "bat", "cmd", "sql", "css", "scss", "sass", "less",
+        "jsx", "tsx", "vue", "svelte", "hs", "ex", "exs", "clj",
+        "groovy", "vb", "vbs", "fs", "lisp", "lsp", "tcsh", "mm",
+        "ini", "toml", "cfg", "conf", "env", "dockerfile",
+        "makefile", "cmake", "gradle",
+    ],
+}
+
+_IMAGE_EXTS = ["jpg", "jpeg", "jpe", "png", "webp", "heic", "heif", "bmp"]
+_AUDIO_EXTS = ["mp3", "aac", "m4a", "opus", "wav", "ogg"]
+
+for _ftype, _exts in _DOC_TYPES.items():
+    for _ext in _exts:
+        _EXT_MAP[_ext] = (_ftype, FileCategory.DOC)
+for _ext in _IMAGE_EXTS:
+    _EXT_MAP[_ext] = ("IMAGE", FileCategory.IMAGE)
+for _ext in _AUDIO_EXTS:
+    _EXT_MAP[_ext] = ("AUDIO", FileCategory.AUDIO)
+
+
+def resolve_file_type(extension: str) -> tuple[str, FileCategory]:
+    """Return (otr_file_type, category) for a file extension.
+
+    Raises ValueError for unsupported extensions.
+    """
+    ext = extension.lower().lstrip(".")
+    if ext not in _EXT_MAP:
+        raise ValueError(
+            f"Unsupported file extension: .{ext}. "
+            f"Supported: documents, images ({', '.join(_IMAGE_EXTS)}), "
+            f"audio ({', '.join(_AUDIO_EXTS)})"
+        )
+    return _EXT_MAP[ext]
+
+
+@dataclass
+class AttachmentInfo:
+    """Uploaded attachment metadata for inclusion in request payload."""
+
+    hash: str
+    key: str
+    category: FileCategory
+    audio_duration: float | None = None
+
+    def to_payload(self) -> dict:
+        """Serialize for the sessions/request ``files`` array."""
+        return {
+            "hash": self.hash,
+            "path": self.key,
+            "source": "ATTACHMENTS",
+            "audio": {"duration": self.audio_duration} if self.audio_duration is not None else None,
+        }
+
+
 # Agent UUIDs for each mode
 AGENT_IDS: dict[SearchMode, str] = {
     SearchMode.ASK: "019a5d95-ab99-7c86-a31c-610dad03b054",
@@ -93,6 +169,7 @@ def build_request_payload(
     domains: list[str] | None = None,
     extended_research: bool = False,
     tone: str = "",
+    attachments: list[AttachmentInfo] | None = None,
 ) -> dict:
     """Build the JSON payload for the sessions/request endpoint."""
     payload: dict = {
@@ -112,5 +189,8 @@ def build_request_payload(
             "extendedResearch": extended_research,
             "tone": tone,
         }
+
+    if attachments:
+        payload["files"] = [a.to_payload() for a in attachments]
 
     return payload

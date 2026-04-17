@@ -29,20 +29,29 @@ def _get_client() -> GigaChatClient:
 
 
 @mcp.tool()
-async def ask(query: str) -> str:
+async def ask(query: str, file_paths: list[str] | None = None) -> str:
     """Search the web and get a concise answer with citations.
 
     Uses GigaChat to search the internet and provide a direct answer
     to your question, similar to Perplexity AI's quick search.
+    Optionally attach files (documents, images, or audio) for the model to analyze.
 
     Args:
         query: The question or search query.
+        file_paths: Optional list of absolute file paths to attach.
+            All files must be of the same type category:
+            documents (pdf, docx, txt, code files, etc.),
+            images (jpg, png, webp, etc.),
+            or audio (mp3, wav, ogg, etc.).
 
     Returns:
         Answer text with source citations in markdown format.
     """
     client = _get_client()
-    result = await client.search(query, SearchMode.ASK)
+    attachments = None
+    if file_paths:
+        attachments = await client.upload_files(file_paths)
+    result = await client.search(query, SearchMode.ASK, attachments=attachments)
     return result.format_markdown()
 
 

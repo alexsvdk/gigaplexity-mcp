@@ -11,9 +11,18 @@ Think of it as your own Perplexity-like search, accessible from any MCP-compatib
 
 | Tool | Description | Speed |
 |------|-------------|-------|
-| `ask` | Quick web search with concise answers and citations | ~20s |
+| `ask` | Quick web search with concise answers and citations. Supports file attachments (documents, images, audio). | ~20s |
 | `research` | Deep multi-step research with comprehensive reports | ~45s |
 | `reason` | Step-by-step reasoning with web-backed analysis | ~5s |
+
+## ⚠️ Disclaimer / Отказ от ответственности
+
+Данный проект создан исключительно в ознакомительных и **образовательных целях** (Educational / Research purposes only). Автор не призывает к нарушению правил сторонних сервисов.
+
+1.  **Личное использование**: Проект предназначен только для частного использования (Local self-hosting). Любое публичное или коммерческое использование данного MCP-сервера может нарушать законы и правила сервиса.
+2.  **Риск блокировки**: Использование неофициальных методов взаимодействия с GigaChat нарушает [Пользовательское соглашение](https://giga.chat/legal/terms) (Terms of Service). ПАО Сбербанк имеет право **заблокировать ваш профиль (Сбер ID)** при обнаружении автоматизированных или нетипичных запросов.
+3.  **Авторские права**: Все права на GigaChat, API и торговые марки принадлежат ПАО Сбербанк. Данный проект является независимой реализацией и не связан с официальной командой Sber AI.
+4.  **Отсутствие гарантий**: ПО предоставляется по лицензии MIT "как есть". Автор не несет ответственности за любые прямые или косвенные последствия использования данного кода, включая блокировки аккаунтов или утечки данных.
 
 ## Quick Start
 
@@ -56,8 +65,21 @@ Add to your MCP client configuration (Claude Desktop, VS Code, etc.):
 Ask your MCP client to use the gigaplexity tools:
 
 - *"Search the web for the latest Python 3.13 features"* → `ask`
+- *"What's in this PDF?"* (attach a file) → `ask` with `file_paths`
+- *"Describe this image"* (attach a photo) → `ask` with `file_paths`
 - *"Research the best database solutions for time-series data"* → `research`
 - *"Reason about why transformer models work so well"* → `reason`
+
+### File Attachments
+
+The `ask` tool supports file attachments via the `file_paths` parameter. Pass absolute paths to local files:
+
+**Supported file types:**
+- **Documents**: pdf, docx, doc, pptx, ppt, xlsx, xls, epub, txt, html, and source code files (py, js, ts, etc.)
+- **Images**: jpg, jpeg, png, webp, heic, heif, bmp
+- **Audio**: mp3, aac, m4a, opus, wav, ogg
+
+**Important**: All files in a single request must be of the **same category** (e.g. only documents, only images, or only audio). Mixing categories in one request is not supported by the GigaChat API.
 
 ## Environment Variables
 
