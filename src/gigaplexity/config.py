@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from base64 import b64decode
+
 import httpx
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -16,6 +19,31 @@ def _parse_cookie(cookies: str, name: str) -> str | None:
         if part.startswith(f"{name}="):
             return part[len(name) + 1 :]
     return None
+
+
+def _decode_jwt_payload(token: str) -> dict:
+    """Decode JWT payload without verification."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+    payload = parts[1]
+    # Fix base64 padding
+    payload += "=" * (-len(payload) % 4)
+    try:
+        return json.loads(b64decode(payload))
+    except Exception:
+        return {}
+
+
+def _extract_user_id(cookies: str | None, sm_sess: str | None) -> str | None:
+    """Extract user_id from JWT 'usr' field in _sm_sess cookie."""
+    token = sm_sess
+    if not token and cookies:
+        token = _parse_cookie(cookies, "_sm_sess")
+    if not token:
+        return None
+    payload = _decode_jwt_payload(token)
+    return payload.get("usr")
 
 
 def _fetch_gigachat_id(cookie_string: str) -> str | None:
@@ -39,9 +67,8 @@ class GigaplexitySettings(BaseSettings):
         GIGACHAT_COOKIES: Full cookie string (recommended), OR
         GIGACHAT_SM_SESS: JWT session token (alternative)
 
-    Optional:
-        GIGACHAT_USER_ID: User UUID (auto-extracted from cookies if not set)
-        GIGACHAT_PROJECT_ID: Project UUID (auto-fetched from profile if not set)
+    Optional (auto-resolved):
+        GIGACHAT_PROJECT_ID: Project UUID (auto-fetched from profile API)
         GIGACHAT_USER_AGENT: Browser User-Agent
         GIGACHAT_BASE_URL: API base URL
         GIGACHAT_APP_VERSION: Application version
@@ -57,8 +84,10 @@ class GigaplexitySettings(BaseSettings):
     # Auth (cookies or sm_sess required)
     cookies: str | None = None
     sm_sess: str | None = None
-    user_id: str | None = None
     project_id: str | None = None
+
+    # Resolved at runtime (not configurable)
+    user_id: str | None = None
 
     # Optional
     user_agent: str = (
@@ -77,23 +106,23 @@ class GigaplexitySettings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_from_cookies(self) -> GigaplexitySettings:
-        """Auto-extract user_id from cookies, auto-fetch project_id from profile."""
+        """Auto-extract user_id from JWT, auto-fetch project_id from profile."""
         if not self.cookies and not self.sm_sess:
             raise ValueError(
                 "Either GIGACHAT_COOKIES or GIGACHAT_SM_SESS must be set"
             )
 
-        if self.cookies and not self.user_id:
-            extracted = _parse_cookie(self.cookies, "_sm_user_id")
-            if extracted:
-                self.user_id = extracted
-
+        # user_id from JWT "usr" field (skip if already provided)
         if not self.user_id:
-            raise ValueError(
-                "GIGACHAT_USER_ID is required (or must be present as "
-                "_sm_user_id in GIGACHAT_COOKIES)"
-            )
+            user_id = _extract_user_id(self.cookies, self.sm_sess)
+            if not user_id:
+                raise ValueError(
+                    "Could not extract user_id from JWT — ensure GIGACHAT_COOKIES "
+                    "or GIGACHAT_SM_SESS contains a valid _sm_sess token"
+                )
+            self.user_id = user_id
 
+        # project_id from profile API
         if not self.project_id:
             cookie_str = self.cookies or self.build_cookie_string()
             giga_id = _fetch_gigachat_id(cookie_str)

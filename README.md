@@ -65,7 +65,6 @@ Ask your MCP client to use the gigaplexity tools:
 |----------|----------|-------------|
 | `GIGACHAT_COOKIES` | ✅* | Full cookie string from DevTools |
 | `GIGACHAT_SM_SESS` | ✅* | JWT token (alternative to COOKIES) |
-| `GIGACHAT_USER_ID` | ❌ | User UUID (auto-extracted from `_sm_user_id` cookie) |
 | `GIGACHAT_PROJECT_ID` | ❌ | Project UUID (auto-fetched from profile API) |
 | `GIGACHAT_USER_AGENT` | ❌ | Browser User-Agent | 
 | `GIGACHAT_BASE_URL` | ❌ | API base URL (default: `https://giga.chat`) | — |
