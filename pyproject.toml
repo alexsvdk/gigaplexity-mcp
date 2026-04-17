@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gigaplexity-mcp"
+version = "0.1.0"
+description = "MCP server that exposes GigaChat web search as tools (ask, research, reason)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "a1exs"},
+]
+keywords = ["mcp", "gigachat", "search", "ai", "perplexity"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "httpx>=0.27.0",
+    "httpx-sse>=0.4.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[project.scripts]
+gigaplexity-mcp = "gigaplexity.server:main"
+
+[project.urls]
+Homepage = "https://github.com/a1exs/gigaplexity-mcp"
+Repository = "https://github.com/a1exs/gigaplexity-mcp"
+Issues = "https://github.com/a1exs/gigaplexity-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gigaplexity"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
