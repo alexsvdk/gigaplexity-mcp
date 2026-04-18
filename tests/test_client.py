@@ -4,13 +4,14 @@ import json
 
 import pytest
 
-from gigaplexity.client import GigaChatClient
+from gigaplexity.client import GigaChatClient, _EventMetrics, _StreamingProgressTracker
 from gigaplexity.config import GigaplexitySettings
 from gigaplexity.models import SearchMode
 
 
 def _make_settings(**overrides) -> GigaplexitySettings:
     defaults = {
+        "cookies": None,
         "sm_sess": "test-jwt-token",
         "user_id": "test-user-id",
         "project_id": "test-project-id",
@@ -213,7 +214,7 @@ class TestSSEParsing:
         from gigaplexity.models import SearchResult
 
         result = SearchResult(text="")
-        client._process_event(
+        tool_names = client._process_event(
             json.dumps(
                 {
                     "status": "IN_PROGRESS",
@@ -228,6 +229,55 @@ class TestSSEParsing:
             result,
         )
         assert result.text == ""
+        assert tool_names == []
+
+    def test_function_in_progress_tool_name_extracted_from_frontend_data(self):
+        client = GigaChatClient(_make_settings())
+        from gigaplexity.models import SearchResult
+
+        result = SearchResult(text="")
+        tool_names = client._process_event(
+            json.dumps(
+                {
+                    "status": "IN_PROGRESS",
+                    "contentDelta": [
+                        {
+                            "role": "FUNCTION_IN_PROGRESS",
+                            "frontendData": {
+                                "function": {
+                                    "name": "web_search",
+                                }
+                            },
+                        }
+                    ],
+                }
+            ),
+            result,
+        )
+        assert result.text == ""
+        assert tool_names == ["web_search"]
+
+    def test_function_in_progress_tool_name_extracted_from_value(self):
+        client = GigaChatClient(_make_settings())
+        from gigaplexity.models import SearchResult
+
+        result = SearchResult(text="")
+        tool_names = client._process_event(
+            json.dumps(
+                {
+                    "status": "IN_PROGRESS",
+                    "contentDelta": [
+                        {
+                            "role": "FUNCTION_IN_PROGRESS",
+                            "value": "web_search",
+                        }
+                    ],
+                }
+            ),
+            result,
+        )
+        assert result.text == ""
+        assert tool_names == ["web_search"]
 
     def test_dedup_citations(self):
         client = GigaChatClient(_make_settings())
@@ -259,3 +309,127 @@ class TestSSEParsing:
         result = SearchResult(text="")
         client._process_event(":keep-alive", result)
         assert result.text == ""
+
+
+class TestProgressTracker:
+    def test_research_jumps_to_milestone_on_generation_start(self):
+        tracker = _StreamingProgressTracker(SearchMode.RESEARCH)
+
+        updates = tracker.update(
+            _EventMetrics(status="IN_PROGRESS", tool_names=[], generated_chars=0, started_generating=False)
+        )
+        assert updates
+        assert updates[-1][0] < 0.70
+
+        updates = tracker.update(
+            _EventMetrics(
+                status="IN_PROGRESS",
+                tool_names=[],
+                generated_chars=0,
+                generated_text="prefix </details> summary",
+                started_generating=True,
+            )
+        )
+        assert updates
+        assert any(message == "Summarizing" for _, message in updates)
+        assert any(progress == pytest.approx(0.70) for progress, _ in updates)
+
+    def test_generation_progress_eases_and_stays_below_cap_until_ready(self):
+        tracker = _StreamingProgressTracker(SearchMode.RESEARCH)
+
+        tracker.update(
+            _EventMetrics(status="IN_PROGRESS", tool_names=[], generated_chars=0, started_generating=True)
+        )
+
+        tracker.update(
+            _EventMetrics(
+                status="IN_PROGRESS",
+                tool_names=[],
+                generated_chars=0,
+                generated_text="before </details> ",
+                started_generating=False,
+            )
+        )
+
+        first = tracker.update(
+            _EventMetrics(
+                status="IN_PROGRESS",
+                tool_names=[],
+                generated_chars=5000,
+                generated_text="summary part 1",
+                started_generating=False,
+            )
+        )
+        second = tracker.update(
+            _EventMetrics(
+                status="IN_PROGRESS",
+                tool_names=[],
+                generated_chars=5000,
+                generated_text="summary part 2",
+                started_generating=False,
+            )
+        )
+        third = tracker.update(
+            _EventMetrics(
+                status="IN_PROGRESS",
+                tool_names=[],
+                generated_chars=5000,
+                generated_text="summary part 3",
+                started_generating=False,
+            )
+        )
+
+        first_progress = first[-1][0]
+        second_progress = second[-1][0]
+        third_progress = third[-1][0]
+
+        assert 0.70 < first_progress < 0.96
+        assert first_progress < second_progress < third_progress < 0.96
+
+        gap1 = second_progress - first_progress
+        gap2 = third_progress - second_progress
+        assert gap2 < gap1
+
+    def test_ready_sets_progress_to_one(self):
+        tracker = _StreamingProgressTracker(SearchMode.ASK)
+
+        tracker.update(
+            _EventMetrics(status="IN_PROGRESS", tool_names=["web_search"], generated_chars=120, started_generating=True)
+        )
+        updates = tracker.update(
+            _EventMetrics(status="READY", tool_names=[], generated_chars=0, started_generating=False)
+        )
+
+        assert updates
+        assert updates[-1][0] == pytest.approx(1.0)
+        assert updates[-1][1] == "Completed"
+
+
+class TestResearchCleanup:
+    def test_cleanup_removes_details_block_and_duplicated_log_prefix(self):
+        client = GigaChatClient(_make_settings())
+        from gigaplexity.models import SearchResult
+
+        result = SearchResult(
+            text=(
+                "<details><summary>Research Log</summary>\n"
+                "internal progress\n"
+                "</details>\n\n"
+                "Conducting initial research on the following query: q\n"
+                "step1\n"
+                "step2\n"
+                "# Final heading\n"
+                "Final answer body"
+            ),
+            mode=SearchMode.RESEARCH,
+            research_log=(
+                "Conducting initial research on the following query: q\n"
+                "step1\n"
+                "step2"
+            ),
+        )
+
+        client._cleanup_result_text(result)
+        assert result.text.startswith("# Final heading")
+        assert "<details" not in result.text.lower()
+        assert "Conducting initial research on the following query:" not in result.text

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from gigaplexity.client import GigaChatClient
 from gigaplexity.config import load_settings
@@ -29,7 +29,11 @@ def _get_client() -> GigaChatClient:
 
 
 @mcp.tool()
-async def ask(query: str, file_paths: list[str] | None = None) -> str:
+async def ask(
+    query: str,
+    file_paths: list[str] | None = None,
+    ctx: Context | None = None,
+) -> str:
     """Search the web and get a concise answer with citations.
 
     Uses GigaChat to search the internet and provide a direct answer
@@ -51,7 +55,17 @@ async def ask(query: str, file_paths: list[str] | None = None) -> str:
     attachments = None
     if file_paths:
         attachments = await client.upload_files(file_paths)
-    result = await client.search(query, SearchMode.ASK, attachments=attachments)
+
+    async def on_progress(progress: float, message: str) -> None:
+        if ctx:
+            await ctx.report_progress(progress=progress, total=1.0, message=message)
+
+    result = await client.search(
+        query,
+        SearchMode.ASK,
+        attachments=attachments,
+        on_progress=on_progress,
+    )
     return result.format_markdown()
 
 
@@ -60,6 +74,7 @@ async def research(
     query: str,
     domains: list[str] | None = None,
     extended: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Conduct deep web research on a topic.
 
@@ -76,17 +91,23 @@ async def research(
         Detailed research report in markdown with citations and research log.
     """
     client = _get_client()
+
+    async def on_progress(progress: float, message: str) -> None:
+        if ctx:
+            await ctx.report_progress(progress=progress, total=1.0, message=message)
+
     result = await client.search(
         query,
         SearchMode.RESEARCH,
         domains=domains,
         extended_research=extended,
+        on_progress=on_progress,
     )
     return result.format_markdown()
 
 
 @mcp.tool()
-async def reason(query: str) -> str:
+async def reason(query: str, ctx: Context | None = None) -> str:
     """Think through a problem step-by-step with web search.
 
     Uses GigaChat's reasoning model to break down complex questions,
@@ -100,7 +121,16 @@ async def reason(query: str) -> str:
         Reasoned answer with thinking steps and citations in markdown format.
     """
     client = _get_client()
-    result = await client.search(query, SearchMode.REASON)
+
+    async def on_progress(progress: float, message: str) -> None:
+        if ctx:
+            await ctx.report_progress(progress=progress, total=1.0, message=message)
+
+    result = await client.search(
+        query,
+        SearchMode.REASON,
+        on_progress=on_progress,
+    )
     return result.format_markdown()
 
 
