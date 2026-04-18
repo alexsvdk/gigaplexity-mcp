@@ -465,6 +465,7 @@ class GigaChatClient:
 
         text = result.text
 
+        # 1. Strip <details> blocks
         while True:
             stripped = text.lstrip()
             if not stripped.lower().startswith("<details"):
@@ -474,19 +475,87 @@ class GigaChatClient:
                 break
             text = stripped[end_index + len("</details>"):].lstrip()
 
+        # 2. Strip research_log prefix
         log = result.research_log.strip()
         stripped_text = text.lstrip()
         if log and stripped_text.startswith(log):
             text = stripped_text[len(log):].lstrip()
-        elif stripped_text.startswith("Conducting initial research on the following query:"):
-            heading_match = re.search(r"(?:^|\n)#\s", stripped_text)
+            stripped_text = text.lstrip()
+
+        # 3. Find the last markdown heading that looks like a report start.
+        #    This handles both cases: log prefix before report, and
+        #    report appearing twice (draft + published).
+        report_markers = ["# Research Report", "## Research Report"]
+        last_report_pos = -1
+        for marker in report_markers:
+            pos = stripped_text.rfind(marker)
+            if pos > last_report_pos:
+                last_report_pos = pos
+
+        if last_report_pos > 0:
+            # There's a report heading not at the very start — check if
+            # the text before it contains log/progress markers
+            prefix = stripped_text[:last_report_pos]
+            has_log_markers = any(
+                m in prefix
+                for m in (
+                    "Conducting initial research",
+                    "Generating report",
+                    "Report generated",
+                    "Publishing the final research report",
+                )
+            )
+            # Also treat it as a duplicate if the same heading exists earlier
+            first_pos = -1
+            for marker in report_markers:
+                pos = stripped_text.find(marker)
+                if pos >= 0 and (first_pos < 0 or pos < first_pos):
+                    first_pos = pos
+            has_duplicate = first_pos >= 0 and first_pos < last_report_pos
+
+            if has_log_markers or has_duplicate:
+                text = stripped_text[last_report_pos:].lstrip()
+                result.text = text
+                return
+
+        # 4. Fallback: find any markdown heading after log-like prefix
+        if stripped_text.startswith("Conducting initial research on the following query:"):
+            heading_match = re.search(r"(?m)^#{1,6}\s", stripped_text)
             if heading_match:
-                start = heading_match.start()
-                if stripped_text[start] == "\n":
-                    start += 1
-                text = stripped_text[start:].lstrip()
+                text = stripped_text[heading_match.start():].lstrip()
+                result.text = text
+                return
+
+        # 5. Handle inline log prefix before heading (no newline)
+        heading_match = re.search(r"#{1,6}\s", stripped_text)
+        if heading_match and heading_match.start() > 0:
+            prefix = stripped_text[:heading_match.start()]
+            if any(
+                m in prefix
+                for m in (
+                    "Conducting initial research",
+                    "Generating report",
+                    "Report generated",
+                    "Publishing",
+                )
+            ):
+                text = stripped_text[heading_match.start():].lstrip()
 
         result.text = text
+
+    def _merge_text(self, current: str, incoming: str) -> str:
+        """Merge streamed text chunks handling both deltas and cumulative snapshots."""
+        if not incoming:
+            return current
+        if not current:
+            return incoming
+        if incoming == current:
+            return current
+        if incoming.startswith(current):
+            return incoming
+        if current.endswith(incoming):
+            return current
+        return current + incoming
 
     def _process_event(self, raw_data: str, result: SearchResult) -> list[str]:
         """Process a single SSE event and update the result."""
@@ -502,6 +571,7 @@ class GigaChatClient:
         """Process a parsed SSE event and update the result."""
 
         tool_names: list[str] = []
+        assistant_delta_appended = False
 
         status = data.get("status")
 
@@ -516,6 +586,10 @@ class GigaChatClient:
 
         # Process content deltas (streaming text)
         for delta in data.get("contentDelta", []):
+            role = delta.get("role", "")
+            text = delta.get("delta", "") or delta.get("value", "")
+            if text and role in ("ASSISTANT", ""):
+                assistant_delta_appended = True
             tool_name = self._process_delta(delta, result)
             if tool_name:
                 tool_names.append(tool_name)
@@ -553,34 +627,73 @@ class GigaChatClient:
 
         # Process research response delta
         response_delta = ai_agent_data.get("response")
-        if response_delta:
+        should_append_response_delta = response_delta and not (
+            result.mode == SearchMode.RESEARCH and assistant_delta_appended
+        )
+        if should_append_response_delta:
             if isinstance(response_delta, list):
                 for entry in response_delta:
                     text = entry.get("text", "") if isinstance(entry, dict) else str(entry)
                     if text:
-                        result.text += text
+                        result.text = self._merge_text(result.text, text)
             elif isinstance(response_delta, str):
-                result.text += response_delta
+                result.text = self._merge_text(result.text, response_delta)
 
         # Process final content (when status is READY)
         if status == "READY" and message.get("content"):
             # Only use final content if we didn't accumulate via deltas
             if not result.text:
-                for content_item in message["content"]:
-                    value = content_item.get("value", "")
-                    if value:
-                        result.text += value
-                    # Extract citations from final content
-                    for markup in content_item.get("markup", []):
-                        if markup.get("url"):
-                            citation = Citation(
-                                key=str(markup.get("key", "")),
-                                title=markup.get("title", ""),
-                                url=markup["url"],
-                                type=markup.get("type", "FOOTNOTE"),
-                            )
-                            if not any(c.url == citation.url for c in result.citations):
-                                result.citations.append(citation)
+                if result.mode == SearchMode.RESEARCH:
+                    # RESEARCH message.content contains log entries interleaved
+                    # with report text. The report may appear twice (draft +
+                    # published). Use only the last report-like item (starts
+                    # with markdown heading) to avoid duplication.
+                    last_report = ""
+                    log_parts: list[str] = []
+                    for content_item in message["content"]:
+                        value = content_item.get("value", "")
+                        if value:
+                            stripped_val = value.strip()
+                            if stripped_val.startswith("#"):
+                                last_report = value
+                            else:
+                                log_parts.append(value)
+                        for markup in content_item.get("markup", []):
+                            if markup.get("url"):
+                                citation = Citation(
+                                    key=str(markup.get("key", "")),
+                                    title=markup.get("title", ""),
+                                    url=markup["url"],
+                                    type=markup.get("type", "FOOTNOTE"),
+                                )
+                                if not any(c.url == citation.url for c in result.citations):
+                                    result.citations.append(citation)
+                    if last_report:
+                        result.text = last_report
+                    else:
+                        # Fallback: concatenate everything
+                        for content_item in message["content"]:
+                            value = content_item.get("value", "")
+                            if value:
+                                result.text = self._merge_text(result.text, value)
+                    if log_parts and not result.research_log.strip():
+                        result.research_log = "".join(log_parts)
+                else:
+                    for content_item in message["content"]:
+                        value = content_item.get("value", "")
+                        if value:
+                            result.text = self._merge_text(result.text, value)
+                        # Extract citations from final content
+                        for markup in content_item.get("markup", []):
+                            if markup.get("url"):
+                                citation = Citation(
+                                    key=str(markup.get("key", "")),
+                                    title=markup.get("title", ""),
+                                    url=markup["url"],
+                                    type=markup.get("type", "FOOTNOTE"),
+                                )
+                                if not any(c.url == citation.url for c in result.citations):
+                                    result.citations.append(citation)
 
         return tool_names
 

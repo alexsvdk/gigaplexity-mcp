@@ -47,6 +47,9 @@ async def test_research_real():
             "Best Python web frameworks in 2026", SearchMode.RESEARCH
         )
         assert result.text, "Expected non-empty response text"
+        assert (
+            "Conducting initial research on the following query:" not in result.text
+        ), "Research progress log should not be duplicated in final body"
         assert result.mode == SearchMode.RESEARCH
         print(f"\n--- RESEARCH RESULT ---\n{result.format_markdown()[:500]}")
     finally:
