@@ -61,7 +61,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/alexsvdk/gigaplexity-mcp",
+        "git+https://github.com/alexsvdk/gigaplexity-mcp@stable",
         "gigaplexity-mcp"
       ],
       "env": {
