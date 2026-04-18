@@ -88,4 +88,4 @@ PR должен содержать:
 
 - Идеи и баги: Issues
 - Обсуждение реализации: Pull Request comments
-- Личная связь: `alex.svdk@gmail.com`
+- Личная связь: [@a1ex5](https://t.me/a1ex5)
