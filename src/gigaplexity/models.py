@@ -146,11 +146,6 @@ class SearchResult:
                 parts.append(step.value)
             parts.append("\n</details>\n")
 
-        if self.research_log:
-            parts.append("<details><summary>Research Log</summary>\n")
-            parts.append(self.research_log)
-            parts.append("\n</details>\n")
-
         parts.append(self.text)
 
         if self.citations:

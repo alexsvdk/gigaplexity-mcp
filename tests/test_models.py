@@ -95,8 +95,8 @@ class TestSearchResult:
             research_log="Searching... Found 5 sources...",
         )
         md = result.format_markdown()
-        assert "Research Log" in md
-        assert "Searching..." in md
+        assert "Research Log" not in md
+        assert "Searching..." not in md
         assert "Research report" in md
 
 
