@@ -115,7 +115,7 @@ class _StreamingProgressTracker:
             self.event_count += 1
             if self.mode == SearchMode.RESEARCH and not self.research_details_closed:
                 pre_summary_cap = self.generation_start_milestone - 0.02
-                thinking_target = pre_summary_cap * (1 - math.exp(-0.18 * self.event_count))
+                thinking_target = pre_summary_cap * (1 - math.exp(-0.05 * self.event_count))
                 maybe = self._emit(thinking_target, "Researching")
             else:
                 thinking_target = self.generation_start_milestone * (1 - math.exp(-0.18 * self.event_count))
@@ -129,7 +129,7 @@ class _StreamingProgressTracker:
             self.seen_tool_names.add(tool_name)
             if self.mode == SearchMode.RESEARCH and not self.research_details_closed:
                 max_before_summary = self.generation_start_milestone - 0.02
-                target = max(self.progress, min(max_before_summary, self.progress + 0.05))
+                target = max(self.progress, min(max_before_summary, self.progress + 0.02))
             else:
                 target = max(self.progress, min(self.generation_start_milestone - 0.05, self.progress + 0.08))
             maybe = self._emit(target, f"Calling {tool_name}")
