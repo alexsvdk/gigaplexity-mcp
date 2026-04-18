@@ -3,55 +3,67 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-**MCP server that turns GigaChat into a web search engine** — ask questions, conduct deep research, and reason through problems, all powered by GigaChat's internet-connected AI.
+**Gigaplexity MCP** — MCP-сервер, который превращает GigaChat в поисковый инструмент: можно быстро получать ответы из интернета, запускать глубокие исследования и пошаговое рассуждение.
 
-Think of it as your own Perplexity-like search, accessible from any MCP-compatible client (Claude Desktop, VS Code Copilot, etc.).
+Работает в MCP-совместимых клиентах (например, VS Code Copilot, Claude Desktop и других).
 
-## Features
+> [!NOTE]
+> Статус проекта: **Alpha**.
 
-| Tool | Description | Speed |
-|------|-------------|-------|
-| `ask` | Quick web search with concise answers and citations. Supports file attachments (documents, images, audio). | ~20s |
-| `research` | Deep multi-step research with comprehensive reports | ~45s |
-| `reason` | Step-by-step reasoning with web-backed analysis | ~5s |
+## Содержание
 
-## ⚠️ Disclaimer / Отказ от ответственности
+- [Возможности](#возможности)
+- [Быстрый старт](#быстрый-старт)
+- [Использование](#использование)
+- [Вложения файлов](#вложения-файлов)
+- [Переменные окружения](#переменные-окружения)
+- [Локальная разработка](#локальная-разработка)
+- [Для контрибьюторов](#для-контрибьюторов)
+- [Как это работает](#как-это-работает)
+- [Архитектура](#архитектура)
+- [Отказ от ответственности](#отказ-от-ответственности)
+- [Лицензия](#лицензия)
 
-Данный проект создан исключительно в ознакомительных и **образовательных целях** (Educational / Research purposes only). Автор не призывает к нарушению правил сторонних сервисов.
+## Возможности
 
-1.  **Личное использование**: Проект предназначен только для частного использования (Local self-hosting). Любое публичное или коммерческое использование данного MCP-сервера может нарушать законы и правила сервиса.
-2.  **Риск блокировки**: Использование неофициальных методов взаимодействия с GigaChat нарушает [Пользовательское соглашение](https://giga.chat/legal/terms) (Terms of Service). ПАО Сбербанк имеет право **заблокировать ваш профиль (Сбер ID)** при обнаружении автоматизированных или нетипичных запросов.
-3.  **Авторские права**: Все права на GigaChat, API и торговые марки принадлежат ПАО Сбербанк. Данный проект является независимой реализацией и не связан с официальной командой Sber AI.
-4.  **Отсутствие гарантий**: ПО предоставляется по лицензии MIT "как есть". Автор не несет ответственности за любые прямые или косвенные последствия использования данного кода, включая блокировки аккаунтов или утечки данных.
+| Инструмент | Что делает | Примерная скорость |
+|---|---|---|
+| `ask` | Короткий ответ с веб-поиском и ссылками. Поддерживает вложения (документы, изображения, аудио). | ~20s |
+| `research` | Глубокое многошаговое исследование по теме с развёрнутым отчётом. | ~45s |
+| `reason` | Пошаговое рассуждение с опорой на веб-источники. | ~5s |
 
-## Quick Start
+## Быстрый старт
 
-### 1. Get GigaChat Cookie
+### 1) Получите cookie GigaChat
 
-You need **one value** from your browser. Log into [giga.chat](https://giga.chat) and open **DevTools** (F12).
+Нужна **одна строка cookie** из браузера. Войдите в [giga.chat](https://giga.chat), откройте DevTools (`F12`) и выполните шаги:
 
-#### `GIGACHAT_COOKIES` — full cookie string
+1. Откройте вкладку **Network**.
+2. Отправьте любое сообщение в чат.
+3. Найдите запрос к `https://giga.chat/api/giga-back-web/api/v0/sessions/request`.
+4. В **Headers** найдите заголовок `Cookie`.
+5. Скопируйте **полное значение** (`_sm_sess=...; _sm_user_id=...; ...`).
 
-1. Go to **Network** tab
-2. Send any message in the chat
-3. Find the request to `https://giga.chat/api/giga-back-web/api/v0/sessions/request`
-4. In the **Headers** tab, find the `Cookie` request header
-5. Copy the **entire** value — it looks like `_sm_sess=eyJ...; _sm_user_id=2a4a...; sticky_cookie_dp=...; ...`
+<details>
+<summary>Зачем полная строка cookie, а не только токен?</summary>
 
-> **Tip:** The `_sm_sess` JWT token expires every ~5 minutes, but GigaChat auto-refreshes it. The full cookie string from a recent browser session usually works for a while.
+Токен `_sm_sess` обычно короткоживущий, а полная актуальная cookie-строка чаще работает стабильнее. 
+`user_id` берётся автоматически из JWT, `project_id` — автоматически через profile API.
 
-That's it! `user_id` is auto-extracted from the cookie string, and `project_id` is auto-fetched from the profile API.
+</details>
 
-### 2. Configure MCP Client
-
-Add to your MCP client configuration (Claude Desktop, VS Code, etc.):
+### 2) Добавьте сервер в конфиг MCP-клиента
 
 ```json
 {
   "mcpServers": {
     "gigaplexity": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/alexsvdk/gigaplexity-mcp", "gigaplexity-mcp"],
+      "args": [
+        "--from",
+        "git+https://github.com/alexsvdk/gigaplexity-mcp",
+        "gigaplexity-mcp"
+      ],
       "env": {
         "GIGACHAT_COOKIES": "_sm_sess=eyJ...; _sm_user_id=2a4a...; sticky_cookie_dp=..."
       }
@@ -60,81 +72,125 @@ Add to your MCP client configuration (Claude Desktop, VS Code, etc.):
 }
 ```
 
-### 3. Use It
+### 3) Задайте первый запрос
 
-Ask your MCP client to use the gigaplexity tools:
+- «Найди последние изменения в Python 3.13» → `ask`
+- «Что в этом PDF?» (с файлом) → `ask` + `file_paths`
+- «Опиши это изображение» (с файлом) → `ask` + `file_paths`
+- «Сделай исследование по time-series базам данных» → `research`
+- «Пошагово объясни, почему трансформеры эффективны» → `reason`
 
-- *"Search the web for the latest Python 3.13 features"* → `ask`
-- *"What's in this PDF?"* (attach a file) → `ask` with `file_paths`
-- *"Describe this image"* (attach a photo) → `ask` with `file_paths`
-- *"Research the best database solutions for time-series data"* → `research`
-- *"Reason about why transformer models work so well"* → `reason`
+## Использование
 
-### File Attachments
+Инструменты сервера:
 
-The `ask` tool supports file attachments via the `file_paths` parameter. Pass absolute paths to local files:
+- `ask(query, file_paths?)`
+- `research(query, domains?, extended?)`
+- `reason(query)`
 
-**Supported file types:**
-- **Documents**: pdf, docx, doc, pptx, ppt, xlsx, xls, epub, txt, html, and source code files (py, js, ts, etc.)
-- **Images**: jpg, jpeg, png, webp, heic, heif, bmp
-- **Audio**: mp3, aac, m4a, opus, wav, ogg
+Если вы используете вложения, передавайте **абсолютные пути** к локальным файлам.
 
-**Important**: All files in a single request must be of the **same category** (e.g. only documents, only images, or only audio). Mixing categories in one request is not supported by the GigaChat API.
+## Вложения файлов
 
-## Environment Variables
+`ask` поддерживает вложения через `file_paths`.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GIGACHAT_COOKIES` | ✅* | Full cookie string from DevTools |
-| `GIGACHAT_SM_SESS` | ✅* | JWT token (alternative to COOKIES) |
-| `GIGACHAT_PROJECT_ID` | ❌ | Project UUID (auto-fetched from profile API) |
-| `GIGACHAT_USER_AGENT` | ❌ | Browser User-Agent | 
-| `GIGACHAT_BASE_URL` | ❌ | API base URL (default: `https://giga.chat`) | — |
-| `GIGACHAT_APP_VERSION` | ❌ | App version (default: `0.94.4`) | — |
-| `GIGACHAT_LANGUAGE` | ❌ | Language preference (default: `en`) | — |
-| `GIGACHAT_TIMEZONE` | ❌ | Timezone (default: `UTC`) | — |
+Поддерживаемые категории:
 
-\* Either `GIGACHAT_COOKIES` (recommended) or `GIGACHAT_SM_SESS` is required. `GIGACHAT_COOKIES` takes priority.
+- **Документы**: `pdf`, `docx`, `doc`, `pptx`, `ppt`, `xlsx`, `xls`, `epub`, `txt`, `html` и файлы кода (`py`, `js`, `ts` и т.д.)
+- **Изображения**: `jpg`, `jpeg`, `png`, `webp`, `heic`, `heif`, `bmp`
+- **Аудио**: `mp3`, `aac`, `m4a`, `opus`, `wav`, `ogg`
 
-## Development
+> [!IMPORTANT]
+> В одном запросе все файлы должны быть только **одной категории** (только документы / только изображения / только аудио).
+
+## Переменные окружения
+
+| Переменная | Обязательна | Описание |
+|---|---|---|
+| `GIGACHAT_COOKIES` | ✅* | Полная cookie-строка из DevTools |
+| `GIGACHAT_SM_SESS` | ✅* | JWT-токен (альтернатива `GIGACHAT_COOKIES`) |
+| `GIGACHAT_PROJECT_ID` | ❌ | UUID проекта (обычно подтягивается автоматически) |
+| `GIGACHAT_USER_AGENT` | ❌ | User-Agent браузера |
+| `GIGACHAT_BASE_URL` | ❌ | Базовый URL API (по умолчанию `https://giga.chat`) |
+| `GIGACHAT_APP_VERSION` | ❌ | Версия приложения (по умолчанию `0.94.4`) |
+| `GIGACHAT_LANGUAGE` | ❌ | Язык (по умолчанию `en`) |
+| `GIGACHAT_TIMEZONE` | ❌ | Часовой пояс (по умолчанию `UTC`) |
+
+\* Нужна либо `GIGACHAT_COOKIES` (рекомендуется), либо `GIGACHAT_SM_SESS`. Приоритет у `GIGACHAT_COOKIES`.
+
+## Локальная разработка
 
 ```bash
-# Clone
 git clone https://github.com/alexsvdk/gigaplexity-mcp
 cd gigaplexity-mcp
 
-# Set up environment
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install pytest pytest-asyncio
 
-# Run unit tests
+# Юнит-тесты
 pytest
 
-# Run integration tests (requires credentials)
+# Интеграционные тесты (нужны валидные credentials)
 export GIGACHAT_COOKIES="..."
 pytest -m integration -s
 ```
 
-## Architecture
+## Для контрибьюторов
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed protocol analysis and design decisions.
+Если вы хотите помочь проекту, начните с этих документов:
 
-## How It Works
+- [CONTRIBUTING.md](CONTRIBUTING.md) — процесс вклада и требования к PR
+- [SECURITY.md](SECURITY.md) — как безопасно сообщать об уязвимостях
+- [CHANGELOG.md](CHANGELOG.md) — формат и история изменений
+- [.github/pull_request_template.md](.github/pull_request_template.md) — шаблон Pull Request
+- [.github/ISSUE_TEMPLATE/bug_report.md](.github/ISSUE_TEMPLATE/bug_report.md) — шаблон bug report
+- [.github/ISSUE_TEMPLATE/feature_request.md](.github/ISSUE_TEMPLATE/feature_request.md) — шаблон feature request
+- [.github/ISSUE_TEMPLATE/question.md](.github/ISSUE_TEMPLATE/question.md) — шаблон вопроса
+- [docs/STYLEGUIDE.md](docs/STYLEGUIDE.md) — единые правила документации
 
-Gigaplexity reverse-engineers GigaChat's web interface to access its search capabilities:
+## Как это работает
 
-1. **Authentication** — Uses your browser session cookies (JWT) to authenticate
-2. **Request** — Sends queries to GigaChat's internal API with the appropriate mode (ask/research/reason)
-3. **Streaming** — Parses Server-Sent Events (SSE) to collect the full response
-4. **Formatting** — Aggregates text, citations, reasoning steps, and research logs into clean markdown
+```mermaid
+flowchart TD
+    A[MCP client] --> B[gigaplexity-mcp]
+    B --> C[Auth via cookies/JWT]
+    C --> D[Request to GigaChat API]
+    D --> E[SSE stream parsing]
+    E --> F[Markdown result with citations]
+```
 
-Each mode uses a different AI agent and model:
-- **Ask**: `GigaChat-3-Ultra` with web search
-- **Research**: `GigaChat-3-Ultra` with deep research agent
-- **Reason**: `GigaChat-2-Reasoning` with step-by-step thinking
+Базовый поток:
 
-## License
+1. **Аутентификация** через cookie/токен браузерной сессии.
+2. **Отправка запроса** в режим `ask`, `research` или `reason`.
+3. **Парсинг SSE-стрима** и сбор полного ответа.
+4. **Форматирование** в удобный markdown (включая ссылки на источники).
+
+Используемые режимы моделей:
+
+- **Ask**: `GigaChat-3-Ultra` + web search
+- **Research**: `GigaChat-3-Ultra` + deep research agent
+- **Reason**: `GigaChat-2-Reasoning` + chain-of-thought режим
+
+## Архитектура
+
+Подробности по протоколу и внутренним решениям: [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Отказ от ответственности
+
+> [!WARNING]
+> Проект создан в **образовательных и исследовательских целях**. Используйте на свой риск.
+
+1. **Личное использование**: проект ориентирован на private/local self-hosting.
+2. **Риск блокировки**: неофициальная автоматизация может нарушать [условия сервиса GigaChat](https://giga.chat/legal/terms).
+3. **Без гарантий**: ПО поставляется по лицензии MIT «как есть», без ответственности автора за последствия использования.
+
+## Лицензия
 
 [MIT](LICENSE)
+
+---
+
+_Для связи: пишите на в телеграм [@a1ex5](https://t.me/a1ex5)._
