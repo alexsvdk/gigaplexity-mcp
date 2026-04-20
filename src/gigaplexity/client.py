@@ -403,6 +403,7 @@ class GigaChatClient:
 
         # Use streaming request so SSE events arrive incrementally
         progress_tracker = _StreamingProgressTracker(mode)
+        stream_error: Exception | None = None
         async with http.stream(
             "POST",
             REQUEST_ENDPOINT,
@@ -430,32 +431,51 @@ class GigaChatClient:
             from httpx_sse import EventSource
 
             event_source = EventSource(response)
-            async for event in event_source.aiter_sse():
-                if event.data:
-                    try:
-                        data = json.loads(event.data)
-                    except json.JSONDecodeError:
-                        logger.debug("Non-JSON SSE data: %s", event.data[:100])
-                        continue
+            try:
+                async for event in event_source.aiter_sse():
+                    if event.data:
+                        try:
+                            data = json.loads(event.data)
+                        except json.JSONDecodeError:
+                            logger.debug("Non-JSON SSE data: %s", event.data[:100])
+                            continue
 
-                    before_text_len = len(result.text)
-                    tool_names = self._process_event_data(data, result)
-                    generated_text = result.text[before_text_len:]
-                    generated_chars = len(generated_text)
+                        before_text_len = len(result.text)
+                        tool_names = self._process_event_data(data, result)
+                        generated_text = result.text[before_text_len:]
+                        generated_chars = len(generated_text)
 
-                    metrics = _EventMetrics(
-                        status=str(data.get("status") or ""),
-                        tool_names=tool_names,
-                        generated_chars=generated_chars,
-                        generated_text=generated_text,
-                        started_generating=before_text_len == 0 and len(result.text) > 0,
-                    )
+                        metrics = _EventMetrics(
+                            status=str(data.get("status") or ""),
+                            tool_names=tool_names,
+                            generated_chars=generated_chars,
+                            generated_text=generated_text,
+                            started_generating=before_text_len == 0 and len(result.text) > 0,
+                        )
 
-                    if on_progress:
-                        for progress, message in progress_tracker.update(metrics):
-                            await on_progress(progress, message)
+                        if on_progress:
+                            for progress, message in progress_tracker.update(metrics):
+                                await on_progress(progress, message)
+            except (httpx.StreamClosed, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                # Stream was interrupted before all events were received.
+                # Use whatever content we've accumulated so far.
+                stream_error = GigaChatError(
+                    f"SSE stream interrupted ({type(exc).__name__})"
+                )
+                logger.warning(
+                    "SSE stream interrupted (%s) for %s request; "
+                    "using %d chars of accumulated text",
+                    type(exc).__name__,
+                    mode.value,
+                    len(result.text),
+                )
 
         self._cleanup_result_text(result)
+
+        # If the stream was cut short and we got no usable text, raise.
+        if stream_error and not result.text.strip():
+            raise stream_error
+
         return result
 
     def _cleanup_result_text(self, result: SearchResult) -> None:
@@ -588,11 +608,16 @@ class GigaChatClient:
         for delta in data.get("contentDelta", []):
             role = delta.get("role", "")
             text = delta.get("delta", "") or delta.get("value", "")
-            if text and role in ("ASSISTANT", ""):
+            if text and role in ("ASSISTANT", "AI", ""):
                 assistant_delta_appended = True
             tool_name = self._process_delta(delta, result)
             if tool_name:
                 tool_names.append(tool_name)
+
+        # Handle top-level delta (full/cumulative text snapshot)
+        top_delta = data.get("delta")
+        if isinstance(top_delta, str) and top_delta:
+            result.text = self._merge_text(result.text, top_delta)
 
         # Process reasoning steps (reason mode)
         for step in data.get("reasoningSteps", []):
@@ -633,7 +658,14 @@ class GigaChatClient:
         if should_append_response_delta:
             if isinstance(response_delta, list):
                 for entry in response_delta:
-                    text = entry.get("text", "") if isinstance(entry, dict) else str(entry)
+                    if isinstance(entry, dict):
+                        text = (
+                            entry.get("text", "")
+                            or entry.get("delta", "")
+                            or entry.get("content", "")
+                        )
+                    else:
+                        text = str(entry)
                     if text:
                         result.text = self._merge_text(result.text, text)
             elif isinstance(response_delta, str):
@@ -646,13 +678,17 @@ class GigaChatClient:
                 if result.mode == SearchMode.RESEARCH:
                     # RESEARCH message.content contains log entries interleaved
                     # with report text. The report may appear twice (draft +
-                    # published). Use only the last report-like item (starts
-                    # with markdown heading) to avoid duplication.
+                    # published). Prefer the AI/TOKEN role item, otherwise
+                    # fall back to last item starting with markdown heading.
                     last_report = ""
+                    ai_report = ""
                     log_parts: list[str] = []
                     for content_item in message["content"]:
                         value = content_item.get("value", "")
-                        if value:
+                        item_role = content_item.get("role", "")
+                        if value and item_role in ("AI", "TOKEN"):
+                            ai_report = value
+                        elif value:
                             stripped_val = value.strip()
                             if stripped_val.startswith("#"):
                                 last_report = value
@@ -668,7 +704,9 @@ class GigaChatClient:
                                 )
                                 if not any(c.url == citation.url for c in result.citations):
                                     result.citations.append(citation)
-                    if last_report:
+                    if ai_report:
+                        result.text = ai_report
+                    elif last_report:
                         result.text = last_report
                     else:
                         # Fallback: concatenate everything
@@ -705,7 +743,7 @@ class GigaChatClient:
             return self._extract_tool_name(delta)
 
         text = delta.get("delta", "") or delta.get("value", "")
-        if text and role in ("ASSISTANT", ""):
+        if text and role in ("ASSISTANT", "AI", ""):
             result.text += text
 
         # Extract citations from markup
