@@ -9,6 +9,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from gigaplexity.client import GigaChatClient
 from gigaplexity.config import load_settings
 from gigaplexity.models import SearchMode
+from gigaplexity.token_store import TokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,8 @@ def _get_client() -> GigaChatClient:
     global _client
     if _client is None:
         settings = load_settings()
-        _client = GigaChatClient(settings)
+        store = TokenStore()  # defaults to ~/.gigaplexity/token_store.json
+        _client = GigaChatClient(settings, token_store=store)
     return _client
 
 

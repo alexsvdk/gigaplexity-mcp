@@ -16,6 +16,8 @@ from urllib.parse import quote
 import httpx
 
 from gigaplexity.config import GigaplexitySettings
+from gigaplexity.token_refresh import TokenRefreshManager
+from gigaplexity.token_store import TokenStore
 from gigaplexity.models import (
     AttachmentInfo,
     Citation,
@@ -217,9 +219,27 @@ class _StreamingProgressTracker:
 class GigaChatClient:
     """Async client for GigaChat web search API."""
 
-    def __init__(self, settings: GigaplexitySettings) -> None:
+    def __init__(
+        self,
+        settings: GigaplexitySettings,
+        token_store: TokenStore | None = None,
+    ) -> None:
         self.settings = settings
         self._http: httpx.AsyncClient | None = None
+
+        # Determine the original token for persistence key
+        original_token = settings.sm_sess
+        if not original_token and settings.cookies:
+            from gigaplexity.config import _parse_cookie
+            original_token = _parse_cookie(settings.cookies, "_sm_sess") or ""
+
+        self._token_manager = TokenRefreshManager(
+            original_token=original_token or "",
+            current_cookies=settings.build_cookie_string(),
+            base_url=settings.base_url,
+            user_agent=settings.user_agent,
+            store=token_store,
+        )
 
     async def _get_http(self) -> httpx.AsyncClient:
         if self._http is None or self._http.is_closed:
@@ -248,7 +268,7 @@ class GigaChatClient:
         """
         http = await self._get_http()
         request_id = self._new_request_id()
-        headers = self.settings.build_headers(request_id)
+        headers = self._build_headers_with_fresh_cookies(request_id)
         headers["Accept"] = "application/json, text/plain, */*"
         headers["Content-Type"] = "application/json"
 
@@ -275,7 +295,7 @@ class GigaChatClient:
         """
         http = await self._get_http()
         request_id = self._new_request_id()
-        headers = self.settings.build_headers(request_id)
+        headers = self._build_headers_with_fresh_cookies(request_id)
         headers["Accept"] = "application/json, text/plain, */*"
         # Remove JSON content-type — httpx will set multipart
         headers.pop("Content-Type", None)
@@ -367,6 +387,13 @@ class GigaChatClient:
 
         return infos
 
+    def _build_headers_with_fresh_cookies(self, request_id: str) -> dict[str, str]:
+        """Build headers using the freshest cookies from the refresh manager."""
+        headers = self.settings.build_headers(request_id)
+        # Override the Cookie header with the token manager's latest cookies
+        headers["Cookie"] = self._token_manager.current_cookies
+        return headers
+
     async def search(
         self,
         query: str,
@@ -379,9 +406,14 @@ class GigaChatClient:
         on_progress: Callable[[float, str], Awaitable[None]] | None = None,
     ) -> SearchResult:
         """Execute a search query and return aggregated results."""
+        http = await self._get_http()
+
+        # Proactive token refresh (no-op if still fresh)
+        await self._token_manager.ensure_valid_token(http)
+
         session_id = self._new_session_id()
         request_id = self._new_request_id()
-        headers = self.settings.build_headers(request_id)
+        headers = self._build_headers_with_fresh_cookies(request_id)
         payload = build_request_payload(
             query,
             mode,
@@ -403,28 +435,46 @@ class GigaChatClient:
 
         # Use streaming request so SSE events arrive incrementally
         progress_tracker = _StreamingProgressTracker(mode)
-        async with http.stream(
-            "POST",
-            REQUEST_ENDPOINT,
-            json=payload,
-            headers=headers,
-        ) as response:
-            content_type = response.headers.get("content-type", "")
-            if "text/event-stream" not in content_type:
-                # Non-streaming response — likely an error (auth failure, etc.)
-                await response.aread()
-                try:
-                    error_body = response.json()
-                    error_msg = (
-                        error_body.get("message")
-                        or error_body.get("error")
-                        or str(error_body)
+
+        # Retry once on auth failure after forcing a token refresh
+        auth_retry_done = False
+        while True:
+            async with http.stream(
+                "POST",
+                REQUEST_ENDPOINT,
+                json=payload,
+                headers=headers,
+            ) as response:
+                content_type = response.headers.get("content-type", "")
+                if "text/event-stream" not in content_type:
+                    # Non-streaming response — likely an error (auth failure, etc.)
+                    await response.aread()
+                    status_code = response.status_code
+
+                    # Retry on 401/403 with a forced token refresh (once)
+                    if status_code in (401, 403) and not auth_retry_done:
+                        auth_retry_done = True
+                        logger.warning(
+                            "Auth error (HTTP %d), forcing token refresh and retrying…",
+                            status_code,
+                        )
+                        refreshed = await self._token_manager.force_refresh(http)
+                        if refreshed:
+                            headers = self._build_headers_with_fresh_cookies(request_id)
+                            continue  # retry the request
+
+                    try:
+                        error_body = response.json()
+                        error_msg = (
+                            error_body.get("message")
+                            or error_body.get("error")
+                            or str(error_body)
+                        )
+                    except Exception:
+                        error_msg = response.text[:500]
+                    raise GigaChatError(
+                        f"API error (HTTP {status_code}): {error_msg}"
                     )
-                except Exception:
-                    error_msg = response.text[:500]
-                raise GigaChatError(
-                    f"API error (HTTP {response.status_code}): {error_msg}"
-                )
 
             # Parse SSE stream
             from httpx_sse import EventSource
@@ -454,6 +504,9 @@ class GigaChatClient:
                     if on_progress:
                         for progress, message in progress_tracker.update(metrics):
                             await on_progress(progress, message)
+
+            # Successfully processed the stream — break out of retry loop
+            break
 
         self._cleanup_result_text(result)
         return result

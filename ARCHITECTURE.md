@@ -150,6 +150,85 @@ FastMCP server exposing three tools:
 - `pydantic` — Data validation
 - `pydantic-settings` — Settings from env vars
 
+## Token Refresh Mechanism
+
+GigaChat JWT tokens (`_sm_sess`) expire after ~3 months but can be silently refreshed, exactly as the official web app does. The server handles this automatically.
+
+### How It Works
+
+```
+         ┌─────────────────┐
+         │  MCP Server      │
+         │  starts up       │
+         └───────┬─────────┘
+                 │
+    ┌────────────▼────────────┐
+    │ TokenStore: check       │
+    │ ~/.gigaplexity/         │
+    │   token_store.json      │
+    │ for a persisted token   │
+    └────────────┬────────────┘
+                 │ (restored or use original)
+    ┌────────────▼────────────┐
+    │ Before each request:    │
+    │ ensure_valid_token()    │
+    │ (proactive, every 1h)   │
+    └────────────┬────────────┘
+                 │
+    ┌────────────▼────────────┐
+    │ GET /api/check          │
+    │ Cookie: _sm_sess=...    │
+    │                         │
+    │ ← 200 + Set-Cookie:    │
+    │   _sm_sess=<new_token>  │
+    └────────────┬────────────┘
+                 │
+    ┌────────────▼────────────┐
+    │ Update in-memory cookie │
+    │ Persist to token_store  │
+    └─────────────────────────┘
+```
+
+### Components
+
+| Module | Class | Responsibility |
+|--------|-------|---------------|
+| `token_store.py` | `TokenStore` | JSON-file persistence at `~/.gigaplexity/token_store.json` |
+| `token_refresh.py` | `TokenRefreshManager` | Async refresh logic, double-check locking |
+| `client.py` | `GigaChatClient` | Integration, retry-on-401/403 |
+
+### Token Persistence (TokenStore)
+
+Tokens are stored in a JSON file keyed by the **first 64 characters** of the original `_sm_sess` value. This allows multiple MCP server instances (with different initial tokens) to coexist without overwriting each other's refresh state.
+
+```json
+{
+  "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjc...": {
+    "sm_sess": "<latest refreshed token>",
+    "cookies": { "_sm_sess": "...", "_sm_user_id": "..." }
+  }
+}
+```
+
+Writes are **atomic** (write to tmp file, then `os.replace`) to prevent corruption.
+
+### Refresh Strategy
+
+Two refresh strategies work together:
+
+1. **Proactive** — `ensure_valid_token()` is called before every `search()`. If more than 1 hour has passed since the last refresh, it calls `GET /api/check` to get a new token. Uses `asyncio.Lock` with double-check locking to avoid thundering-herd refreshes.
+
+2. **Reactive** — If a search request returns HTTP 401 or 403, the client calls `force_refresh()` to immediately refresh the token, then retries the request **exactly once**. If the retry also fails, the error propagates to the caller.
+
+### Logging
+
+All refresh activity is logged via Python `logging`:
+
+- `INFO` — successful refresh, token restored from disk
+- `WARNING` — auth errors that trigger retry, `/api/check` returning `result=false`
+- `ERROR` — refresh failures (HTTP errors, network errors)
+- `DEBUG` — refresh attempts, no-op refreshes (token still fresh)
+
 ## Installation
 
 ```bash
