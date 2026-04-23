@@ -9,6 +9,9 @@ import pytest
 from gigaplexity.config import _DEFAULT_STATIC_USER_AGENT, GigaplexitySettings
 from gigaplexity.user_agent import choose_browser, generate_user_agent
 
+BROWSER_DISTRIBUTION_TOLERANCE = 0.03
+TEST_SEED_ITERATIONS = 2_000
+
 
 def _make_settings(**overrides) -> GigaplexitySettings:
     defaults = {
@@ -22,11 +25,14 @@ def _make_settings(**overrides) -> GigaplexitySettings:
 
 
 def _detect_browser(ua: str) -> str:
+    is_safari_without_chrome = (
+        "Version/" in ua and "Safari/" in ua and "Chrome/" not in ua
+    )
     if "YaBrowser/" in ua:
         return "yandex"
     if "Firefox/" in ua:
         return "firefox"
-    if "Version/" in ua and "Safari/" in ua and "Chrome/" not in ua:
+    if is_safari_without_chrome:
         return "safari"
     if "Chrome/" in ua:
         return "chrome"
@@ -70,11 +76,11 @@ def test_ru_distribution_is_within_tolerance():
     expected = {"chrome": 0.49, "yandex": 0.38, "safari": 0.09, "firefox": 0.03}
     for browser, target_share in expected.items():
         observed_share = counts[browser] / sample_size
-        assert abs(observed_share - target_share) <= 0.03
+        assert abs(observed_share - target_share) <= BROWSER_DISTRIBUTION_TOLERANCE
 
 
 def test_generator_never_emits_invalid_browser_platform_pairs():
-    for seed in range(2_000):
+    for seed in range(TEST_SEED_ITERATIONS):
         ua = generate_user_agent(locale="ru", seed=str(seed))
         browser = _detect_browser(ua)
 
@@ -82,7 +88,8 @@ def test_generator_never_emits_invalid_browser_platform_pairs():
             assert "Windows NT" not in ua
             assert "Linux x86_64" not in ua
         if browser == "yandex":
-            assert "Windows NT" in ua or "Android" in ua
+            valid_platform = "Windows NT" in ua or "Android" in ua
+            assert valid_platform, f"Invalid Yandex platform UA: {ua}"
 
 
 def test_invalid_user_agent_mode_raises():

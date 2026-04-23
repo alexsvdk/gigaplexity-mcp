@@ -146,7 +146,12 @@ class GigaplexitySettings(BaseSettings):
         return self
 
     def _resolve_user_agent(self) -> None:
-        mode = (self.user_agent_mode or ("fixed" if self.user_agent else "random")).lower()
+        if self.user_agent_mode:
+            mode = self.user_agent_mode.lower()
+        elif self.user_agent:
+            mode = "fixed"
+        else:
+            mode = "random"
         if mode not in {"fixed", "random"}:
             raise ValueError("GIGACHAT_USER_AGENT_MODE must be 'fixed' or 'random'")
         self.user_agent_mode = mode
@@ -188,13 +193,16 @@ class GigaplexitySettings(BaseSettings):
 
     def build_headers(self, request_id: str) -> dict[str, str]:
         """Build common request headers."""
+        user_agent = self.user_agent
+        if user_agent is None:
+            raise ValueError("User-Agent is not resolved")
         return {
             "Accept": "text/event-stream, application/json",
             "Content-Type": "application/json",
             "Cookie": self.build_cookie_string(),
             "Origin": self.base_url,
             "Referer": f"{self.base_url}/",
-            "User-Agent": self.user_agent or _DEFAULT_STATIC_USER_AGENT,
+            "User-Agent": user_agent,
             "X-Application-Name": "gigachat-b2c-web",
             "X-Application-Version": self.app_version,
             "X-User-Timezone": self.timezone,

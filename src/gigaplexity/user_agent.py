@@ -23,7 +23,10 @@ GLOBAL_BROWSER_WEIGHTS: dict[BrowserName, float] = {
     "firefox": 0.07,
 }
 
-_VERSION_BUCKET_WEIGHTS = [0.55, 0.25, 0.12, 0.08]
+_VERSION_RECENCY_WEIGHTS = [0.55, 0.25, 0.12, 0.08]
+# current stable, previous, pre-previous, older tail
+_OLD_VERSION_BUCKET_INDEX = 3
+_DEFAULT_CHROMIUM_VERSION = "135"
 
 
 @dataclass(frozen=True)
@@ -68,16 +71,19 @@ _VERSION_POOLS: dict[BrowserName, list[VersionSpec]] = {
 }
 
 
-T = TypeVar("T")
+WeightedItem = TypeVar("WeightedItem")
 
 
-def _weighted_choice(items: list[T], weights: list[float], rng: random.Random) -> T:
+def _weighted_choice(
+    items: list[WeightedItem], weights: list[float], rng: random.Random
+) -> WeightedItem:
     return rng.choices(items, weights=weights, k=1)[0]
 
 
 def _resolve_rng(seed: str | None) -> random.Random:
     if seed is None:
         return random.Random()
+    # Int seeds support deterministic tests and accept signed numeric strings.
     if seed.lstrip("-").isdigit():
         return random.Random(int(seed))
     digest = hashlib.sha256(seed.encode("utf-8")).digest()
@@ -97,10 +103,14 @@ def choose_browser(locale: str = "ru", rng: random.Random | None = None) -> Brow
 def choose_version(browser: BrowserName, rng: random.Random | None = None) -> VersionSpec:
     rng = rng or random.Random()
     versions = _VERSION_POOLS[browser]
-    bucket = _weighted_choice([0, 1, 2, 3], _VERSION_BUCKET_WEIGHTS, rng)
-    if bucket < 3:
+    bucket = _weighted_choice(
+        [0, 1, 2, _OLD_VERSION_BUCKET_INDEX],
+        _VERSION_RECENCY_WEIGHTS,
+        rng,
+    )
+    if bucket < _OLD_VERSION_BUCKET_INDEX:
         return versions[bucket]
-    return rng.choice(versions[3:])
+    return rng.choice(versions[_OLD_VERSION_BUCKET_INDEX:])
 
 
 def _choose_platform(browser: BrowserName, rng: random.Random) -> str:
@@ -143,7 +153,7 @@ def build_user_agent(
         )
 
     if browser == "yandex":
-        chromium = version.chromium or "135"
+        chromium = version.chromium or _DEFAULT_CHROMIUM_VERSION
         if platform == "windows":
             return (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
