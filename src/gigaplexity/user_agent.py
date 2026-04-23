@@ -16,13 +16,6 @@ RU_BROWSER_WEIGHTS: dict[BrowserName, float] = {
     "firefox": 0.03,
 }
 
-GLOBAL_BROWSER_WEIGHTS: dict[BrowserName, float] = {
-    "chrome": 0.65,
-    "yandex": 0.04,
-    "safari": 0.24,
-    "firefox": 0.07,
-}
-
 _VERSION_RECENCY_WEIGHTS = [0.55, 0.25, 0.12, 0.08]
 # current stable, previous, pre-previous, older tail
 _OLD_VERSION_BUCKET_INDEX = 3
@@ -90,14 +83,10 @@ def _resolve_rng(seed: str | None) -> random.Random:
     return random.Random(int.from_bytes(digest[:8], "big"))
 
 
-def choose_browser(locale: str = "ru", rng: random.Random | None = None) -> BrowserName:
+def choose_browser(rng: random.Random | None = None) -> BrowserName:
     rng = rng or random.Random()
-    profiles = {"ru": RU_BROWSER_WEIGHTS, "global": GLOBAL_BROWSER_WEIGHTS}
-    if locale not in profiles:
-        raise ValueError("GIGACHAT_USER_AGENT_LOCALE must be 'ru' or 'global'")
-    profile = profiles[locale]
-    browsers = list(profile.keys())
-    return _weighted_choice(browsers, [profile[b] for b in browsers], rng)
+    browsers = list(RU_BROWSER_WEIGHTS.keys())
+    return _weighted_choice(browsers, [RU_BROWSER_WEIGHTS[b] for b in browsers], rng)
 
 
 def choose_version(browser: BrowserName, rng: random.Random | None = None) -> VersionSpec:
@@ -206,8 +195,8 @@ def build_user_agent(
     )
 
 
-def generate_user_agent(locale: str = "ru", seed: str | None = None) -> str:
+def generate_user_agent(seed: str | None = None) -> str:
     rng = _resolve_rng(seed)
-    browser = choose_browser(locale=locale, rng=rng)
+    browser = choose_browser(rng=rng)
     version = choose_version(browser, rng=rng)
     return build_user_agent(browser, version, rng=rng)

@@ -13,10 +13,6 @@ from pydantic_settings import BaseSettings
 from gigaplexity.user_agent import generate_user_agent
 
 _PROFILE_URL = "https://giga.chat/api/profile/api/v0/mobile/init"
-_DEFAULT_STATIC_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +73,7 @@ class GigaplexitySettings(BaseSettings):
 
     Optional (auto-resolved):
         GIGACHAT_PROJECT_ID: Project UUID (auto-fetched from profile API)
-        GIGACHAT_USER_AGENT: Browser User-Agent
+        GIGACHAT_USER_AGENT: Browser User-Agent or random[/seed]
         GIGACHAT_BASE_URL: API base URL
         GIGACHAT_APP_VERSION: Application version
         GIGACHAT_LANGUAGE: Language preference
@@ -98,10 +94,7 @@ class GigaplexitySettings(BaseSettings):
     user_id: str | None = None
 
     # Optional
-    user_agent: str | None = None
-    user_agent_mode: str | None = None
-    user_agent_locale: str = "ru"
-    user_agent_seed: str | None = None
+    user_agent: str = "random"
     base_url: str = "https://giga.chat"
     app_version: str = "0.94.4"
     language: str = "en"
@@ -146,27 +139,19 @@ class GigaplexitySettings(BaseSettings):
         return self
 
     def _resolve_user_agent(self) -> None:
-        if self.user_agent_mode:
-            mode = self.user_agent_mode.lower()
-        elif self.user_agent:
-            mode = "fixed"
-        else:
-            mode = "random"
-        if mode not in {"fixed", "random"}:
-            raise ValueError("GIGACHAT_USER_AGENT_MODE must be 'fixed' or 'random'")
-        self.user_agent_mode = mode
-
-        if self.user_agent:
+        ua_value = (self.user_agent or "random").strip()
+        if ua_value in {"random", "random/"}:
+            self.user_agent = generate_user_agent()
+            logger.debug("Selected random User-Agent: %s", self.user_agent)
             return
-        if mode == "fixed":
-            self.user_agent = _DEFAULT_STATIC_USER_AGENT
+        if ua_value.startswith("random/"):
+            seed_part = ua_value.split("/", 1)[1]
+            seed = seed_part if seed_part else None
+            self.user_agent = generate_user_agent(seed=seed)
+            logger.debug("Selected random User-Agent: %s", self.user_agent)
             return
 
-        self.user_agent = generate_user_agent(
-            locale=self.user_agent_locale,
-            seed=self.user_agent_seed,
-        )
-        logger.debug("Selected random User-Agent: %s", self.user_agent)
+        self.user_agent = ua_value
 
     def build_cookie_string(self) -> str:
         """Build the full cookie header value."""
@@ -193,16 +178,13 @@ class GigaplexitySettings(BaseSettings):
 
     def build_headers(self, request_id: str) -> dict[str, str]:
         """Build common request headers."""
-        user_agent = self.user_agent
-        if user_agent is None:
-            raise ValueError("User-Agent is not resolved")
         return {
             "Accept": "text/event-stream, application/json",
             "Content-Type": "application/json",
             "Cookie": self.build_cookie_string(),
             "Origin": self.base_url,
             "Referer": f"{self.base_url}/",
-            "User-Agent": user_agent,
+            "User-Agent": self.user_agent,
             "X-Application-Name": "gigachat-b2c-web",
             "X-Application-Version": self.app_version,
             "X-User-Timezone": self.timezone,
