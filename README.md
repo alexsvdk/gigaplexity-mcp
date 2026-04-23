@@ -110,7 +110,10 @@
 | `GIGACHAT_COOKIES` | ✅* | Полная cookie-строка из DevTools |
 | `GIGACHAT_SM_SESS` | ✅* | JWT-токен (альтернатива `GIGACHAT_COOKIES`) |
 | `GIGACHAT_PROJECT_ID` | ❌ | UUID проекта (обычно подтягивается автоматически) |
-| `GIGACHAT_USER_AGENT` | ❌ | User-Agent браузера |
+| `GIGACHAT_USER_AGENT` | ❌ | Фиксированный User-Agent (имеет приоритет над генерацией) |
+| `GIGACHAT_USER_AGENT_MODE` | ❌ | `random` (по умолчанию, если `GIGACHAT_USER_AGENT` пуст) или `fixed` |
+| `GIGACHAT_USER_AGENT_LOCALE` | ❌ | Профиль генерации UA: `ru` (по умолчанию) или `global` |
+| `GIGACHAT_USER_AGENT_SEED` | ❌ | Seed для воспроизводимого выбора случайного UA |
 | `GIGACHAT_BASE_URL` | ❌ | Базовый URL API (по умолчанию `https://giga.chat`) |
 | `GIGACHAT_APP_VERSION` | ❌ | Версия приложения (по умолчанию `0.94.4`) |
 | `GIGACHAT_LANGUAGE` | ❌ | Язык (по умолчанию `en`) |

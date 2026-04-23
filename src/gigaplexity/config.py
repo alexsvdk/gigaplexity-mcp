@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from base64 import b64decode
 
 import httpx
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
+from gigaplexity.user_agent import generate_user_agent
+
 _PROFILE_URL = "https://giga.chat/api/profile/api/v0/mobile/init"
+_DEFAULT_STATIC_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
+)
+logger = logging.getLogger(__name__)
 
 
 def _parse_cookie(cookies: str, name: str) -> str | None:
@@ -90,10 +98,10 @@ class GigaplexitySettings(BaseSettings):
     user_id: str | None = None
 
     # Optional
-    user_agent: str = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
-    )
+    user_agent: str | None = None
+    user_agent_mode: str | None = None
+    user_agent_locale: str = "ru"
+    user_agent_seed: str | None = None
     base_url: str = "https://giga.chat"
     app_version: str = "0.94.4"
     language: str = "en"
@@ -134,7 +142,26 @@ class GigaplexitySettings(BaseSettings):
                     "from profile API — set it manually)"
                 )
 
+        self._resolve_user_agent()
         return self
+
+    def _resolve_user_agent(self) -> None:
+        mode = (self.user_agent_mode or ("fixed" if self.user_agent else "random")).lower()
+        if mode not in {"fixed", "random"}:
+            raise ValueError("GIGACHAT_USER_AGENT_MODE must be 'fixed' or 'random'")
+        self.user_agent_mode = mode
+
+        if self.user_agent:
+            return
+        if mode == "fixed":
+            self.user_agent = _DEFAULT_STATIC_USER_AGENT
+            return
+
+        self.user_agent = generate_user_agent(
+            locale=self.user_agent_locale,
+            seed=self.user_agent_seed,
+        )
+        logger.debug("Selected random User-Agent: %s", self.user_agent)
 
     def build_cookie_string(self) -> str:
         """Build the full cookie header value."""
@@ -167,7 +194,7 @@ class GigaplexitySettings(BaseSettings):
             "Cookie": self.build_cookie_string(),
             "Origin": self.base_url,
             "Referer": f"{self.base_url}/",
-            "User-Agent": self.user_agent,
+            "User-Agent": self.user_agent or _DEFAULT_STATIC_USER_AGENT,
             "X-Application-Name": "gigachat-b2c-web",
             "X-Application-Version": self.app_version,
             "X-User-Timezone": self.timezone,
