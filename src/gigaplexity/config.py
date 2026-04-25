@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from base64 import b64decode
 
 import httpx
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
+from gigaplexity.user_agent import generate_user_agent
+
 _PROFILE_URL = "https://giga.chat/api/profile/api/v0/mobile/init"
+logger = logging.getLogger(__name__)
 
 
 def _parse_cookie(cookies: str, name: str) -> str | None:
@@ -69,7 +73,7 @@ class GigaplexitySettings(BaseSettings):
 
     Optional (auto-resolved):
         GIGACHAT_PROJECT_ID: Project UUID (auto-fetched from profile API)
-        GIGACHAT_USER_AGENT: Browser User-Agent
+        GIGACHAT_USER_AGENT: Browser User-Agent or random[/seed]
         GIGACHAT_BASE_URL: API base URL
         GIGACHAT_APP_VERSION: Application version
         GIGACHAT_LANGUAGE: Language preference
@@ -90,10 +94,7 @@ class GigaplexitySettings(BaseSettings):
     user_id: str | None = None
 
     # Optional
-    user_agent: str = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
-    )
+    user_agent: str = "random"
     base_url: str = "https://giga.chat"
     app_version: str = "0.94.4"
     language: str = "en"
@@ -134,7 +135,23 @@ class GigaplexitySettings(BaseSettings):
                     "from profile API — set it manually)"
                 )
 
+        self._resolve_user_agent()
         return self
+
+    def _resolve_user_agent(self) -> None:
+        ua_value = (self.user_agent or "random").strip()
+        if ua_value in {"random", "random/"}:
+            self.user_agent = generate_user_agent()
+            logger.debug("Selected random User-Agent: %s", self.user_agent)
+            return
+        if ua_value.startswith("random/"):
+            seed_part = ua_value.split("/", 1)[1]
+            seed = seed_part if seed_part else None
+            self.user_agent = generate_user_agent(seed=seed)
+            logger.debug("Selected random User-Agent: %s", self.user_agent)
+            return
+
+        self.user_agent = ua_value
 
     def build_cookie_string(self) -> str:
         """Build the full cookie header value."""
