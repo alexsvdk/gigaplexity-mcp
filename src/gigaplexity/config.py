@@ -96,7 +96,7 @@ class GigaplexitySettings(BaseSettings):
     # Optional
     user_agent: str = "random"
     base_url: str = "https://giga.chat"
-    app_version: str = "0.94.4"
+    app_version: str = "0.94.11"
     language: str = "en"
     timezone: str = "UTC"
 

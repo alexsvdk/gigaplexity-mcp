@@ -11,7 +11,7 @@
 - 
 
 ### Changed
-- 
+- Updated app version to 0.94.11 to match current GigaChat web interface
 
 ### Fixed
 - 
