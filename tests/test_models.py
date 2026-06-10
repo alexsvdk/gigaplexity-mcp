@@ -16,18 +16,23 @@ from gigaplexity.models import (
 
 class TestBuildRequestPayload:
     def test_ask_mode(self):
-        payload = build_request_payload("hello", SearchMode.ASK, "sess-123")
+        payload = build_request_payload("hello", SearchMode.ASK)
         assert payload == {
             "text": "hello",
             "agent": "019a5d95-ab99-7c86-a31c-610dad03b054",
-            "sessionId": "sess-123",
-            "featureFlags": [],
+            "model": "GigaChat-3-Ultra",
         }
-        assert "model" not in payload
         assert "aiAgent" not in payload
+        assert "sessionId" not in payload
+        assert "featureFlags" not in payload
+
+    def test_existing_session_id_can_be_sent_explicitly(self):
+        payload = build_request_payload("hello", SearchMode.ASK, "sess-123")
+        assert payload["sessionId"] == "sess-123"
+        assert "featureFlags" not in payload
 
     def test_research_mode_defaults(self):
-        payload = build_request_payload("topic", SearchMode.RESEARCH, "sess-456")
+        payload = build_request_payload("topic", SearchMode.RESEARCH)
         assert payload["agent"] == "9384a8fd-39e0-4da9-9bc4-da143487449f"
         assert payload["model"] == "GigaChat-3-Ultra"
         assert payload["aiAgent"] == {
@@ -50,7 +55,7 @@ class TestBuildRequestPayload:
         assert payload["aiAgent"]["tone"] == "formal"
 
     def test_reason_mode(self):
-        payload = build_request_payload("why?", SearchMode.REASON, "sess-abc")
+        payload = build_request_payload("why?", SearchMode.REASON)
         assert payload["agent"] == "7101c625-42ab-45fe-b168-323970c12eba"
         assert payload["model"] == "GigaChat-2-Reasoning"
         assert "aiAgent" not in payload
@@ -172,7 +177,7 @@ class TestBuildRequestPayloadWithAttachments:
             AttachmentInfo(hash="h2", key="k2.pdf", category=FileCategory.DOC),
         ]
         payload = build_request_payload(
-            "analyze these", SearchMode.ASK, "sess-1", attachments=attachments
+            "analyze these", SearchMode.ASK, attachments=attachments
         )
         assert "files" in payload
         assert len(payload["files"]) == 2

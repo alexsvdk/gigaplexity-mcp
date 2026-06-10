@@ -248,9 +248,7 @@ class GigaChatClient:
         """
         http = await self._get_http()
         request_id = self._new_request_id()
-        headers = self.settings.build_headers(request_id)
-        headers["Accept"] = "application/json, text/plain, */*"
-        headers["Content-Type"] = "application/json"
+        headers = self.settings.build_attachments_headers(request_id)
 
         resp = await http.post(
             OTR_ENDPOINT,
@@ -275,10 +273,7 @@ class GigaChatClient:
         """
         http = await self._get_http()
         request_id = self._new_request_id()
-        headers = self.settings.build_headers(request_id)
-        headers["Accept"] = "application/json, text/plain, */*"
-        # Remove JSON content-type — httpx will set multipart
-        headers.pop("Content-Type", None)
+        headers = self.settings.build_attachments_headers(request_id, multipart=True)
 
         file_size = file_path.stat().st_size
         headers["x-file-size"] = str(file_size)
@@ -299,8 +294,19 @@ class GigaChatClient:
             )
 
         if resp.status_code != 201:
+            error_snippet = resp.text[:300]
+            extra_hint = ""
+            if "GC-ATT-E005" in resp.text or "token has expired" in resp.text.lower():
+                extra_hint = (
+                    " Attachment upload token is expired; refresh GIGACHAT_COOKIES "
+                    "from a logged-in browser session. If it still fails, capture a "
+                    "fresh HAR while uploading a file because the attachments upload "
+                    "flow may require additional browser-issued tokens. Keep HAR files "
+                    "private and redact cookies, authorization headers, and tokens before "
+                    "sharing them."
+                )
             raise GigaChatError(
-                f"Failed to upload file (HTTP {resp.status_code}): {resp.text[:300]}"
+                f"Failed to upload file (HTTP {resp.status_code}): {error_snippet}{extra_hint}"
             )
         return resp.json()
 
@@ -379,13 +385,11 @@ class GigaChatClient:
         on_progress: Callable[[float, str], Awaitable[None]] | None = None,
     ) -> SearchResult:
         """Execute a search query and return aggregated results."""
-        session_id = self._new_session_id()
         request_id = self._new_request_id()
-        headers = self.settings.build_headers(request_id)
+        headers = self.settings.build_back_web_headers(request_id)
         payload = build_request_payload(
             query,
             mode,
-            session_id,
             domains=domains,
             extended_research=extended_research,
             tone=tone,
@@ -398,7 +402,6 @@ class GigaChatClient:
         result = SearchResult(
             text="",
             mode=mode,
-            session_id=session_id,
         )
 
         # Use streaming request so SSE events arrive incrementally
@@ -594,6 +597,10 @@ class GigaChatClient:
         assistant_delta_appended = False
 
         status = data.get("status")
+
+        session_id = data.get("sessionId")
+        if isinstance(session_id, str) and session_id and not result.session_id:
+            result.session_id = session_id
 
         # Extract message ID from initial event
         message = data.get("message", {})
