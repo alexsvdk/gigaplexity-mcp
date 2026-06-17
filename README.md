@@ -115,6 +115,8 @@
 | `GIGACHAT_APP_VERSION` | ❌ | Версия приложения (по умолчанию `0.94.4`) |
 | `GIGACHAT_LANGUAGE` | ❌ | Язык (по умолчанию `en`) |
 | `GIGACHAT_TIMEZONE` | ❌ | Часовой пояс (по умолчанию `UTC`) |
+| `GIGACHAT_PREFLIGHT_ON_START` | ❌ | Запускать `GET /api/check` при старте MCP-сервера (по умолчанию `true`) |
+| `GIGACHAT_PREFLIGHT_SKEW` | ❌ | Запас в секундах до JWT `exp`, после которого токен считается истёкшим (по умолчанию `60`) |
 
 \* Нужна либо `GIGACHAT_COOKIES` (рекомендуется), либо `GIGACHAT_SM_SESS`. Приоритет у `GIGACHAT_COOKIES`.
 
@@ -156,17 +158,27 @@ pytest -m integration -s
 flowchart TD
     A[MCP client] --> B[gigaplexity-mcp]
     B --> C[Auth via cookies/JWT]
-    C --> D[Request to GigaChat API]
-    D --> E[SSE stream parsing]
-    E --> F[Markdown result with citations]
+    C --> D[Preflight: GET /api/check + JWT exp]
+    D --> E[Request to GigaChat API]
+    E --> F[SSE stream parsing]
+    F --> G[Markdown result with citations]
 ```
 
 Базовый поток:
 
 1. **Аутентификация** через cookie/токен браузерной сессии.
-2. **Отправка запроса** в режим `ask`, `research` или `reason`.
-3. **Парсинг SSE-стрима** и сбор полного ответа.
-4. **Форматирование** в удобный markdown (включая ссылки на источники).
+2. **Preflight** при первом обращении: локально проверяется `exp` JWT
+   (с запасом `GIGACHAT_PREFLIGHT_SKEW` секунд), затем — `GET /api/check`.
+   Если токен истёк, MCP-сервер сразу возвращает `AuthExpiredError` с
+   понятной инструкцией по обновлению cookie.
+3. **Отправка запроса** в режим `ask`, `research` или `reason`.
+4. **Парсинг SSE-стрима** и сбор полного ответа.
+5. **Форматирование** в удобный markdown (включая ссылки на источники).
+
+> [!TIP]
+> Auto-refresh `_sm_sess` в клиенте не поддерживается: для выпуска новой
+> cookie требуется SSO-редирект через браузер (Keymaster). Подробности и
+> инструкции — в [docs/refresh-strategy.md](docs/refresh-strategy.md).
 
 Используемые режимы моделей:
 

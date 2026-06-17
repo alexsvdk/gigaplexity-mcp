@@ -99,6 +99,38 @@ Loads all settings from environment variables:
 - `GIGACHAT_USER_AGENT` — Custom User-Agent string
 - `GIGACHAT_BASE_URL` — API base URL (default: `https://giga.chat`)
 - `GIGACHAT_APP_VERSION` — Application version (default: `0.94.4`)
+- `GIGACHAT_PREFLIGHT_ON_START` — Run `GET /api/check` once on startup (default `true`)
+- `GIGACHAT_PREFLIGHT_SKEW` — JWT `exp` skew in seconds (default `60`)
+
+JWT payload decoding lives in [`src/gigaplexity/jwt_utils.py`](src/gigaplexity/jwt_utils.py)
+to avoid an import cycle with `preflight.py`.
+
+### Auth lifecycle: preflight on startup
+
+The MCP server runs a one-shot preflight check before the first real
+request. Implementation: [`src/gigaplexity/preflight.py`](src/gigaplexity/preflight.py).
+
+1. Decode `_sm_sess` locally and compare `exp` to `now + preflight_skew_seconds`.
+   If already expired (or the JWT is missing/malformed), set
+   `should_refresh=True` and **do not** hit the network.
+2. Otherwise, call `GET /api/check` with the same headers as a regular
+   request.
+   * HTTP 200 with `result=true` → `ok=True`, continue.
+   * HTTP 401/403 or `result=false` → `should_refresh=True`.
+   * Any other non-200 → `should_refresh=True` (`reason="http_error"`).
+   * Network error → `ok=False`, `should_refresh=False` (do not block
+     startup — fall through to the real request and surface the real
+     error there).
+
+If `should_refresh=True`, the server raises `AuthExpiredError` (a
+`GigaChatError` subclass with a ready-to-paste remediation message)
+before the first user request. Mid-flight 401/403 or `token has expired`
+bodies are also mapped to `AuthExpiredError` for consistency.
+
+Auto-refresh in the client is intentionally **not** implemented — a real
+refresh requires an SSO round-trip through Keymaster. See
+[`docs/refresh-strategy.md`](docs/refresh-strategy.md) for the full
+rationale and recovery steps.
 
 ### 2. `models.py` — Data Models
 

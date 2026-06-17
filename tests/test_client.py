@@ -9,11 +9,11 @@ import pytest
 import gigaplexity.config as config
 from gigaplexity.client import (
     GigaChatClient,
-    GigaChatError,
     _EventMetrics,
     _StreamingProgressTracker,
 )
 from gigaplexity.config import GigaplexitySettings
+from gigaplexity.errors import AuthExpiredError, GigaChatError
 from gigaplexity.models import SearchMode
 
 
@@ -493,7 +493,8 @@ class TestResearchCleanup:
 
 class TestAttachmentUploadDiagnostics:
     @pytest.mark.asyncio
-    async def test_upload_file_expired_token_hint(self, tmp_path, monkeypatch):
+    async def test_upload_file_expired_token_raises_auth_expired(self, tmp_path, monkeypatch):
+        """Upload with expired-token body now raises AuthExpiredError."""
         file_path = tmp_path / "sample.txt"
         file_path.write_text("hello")
         client = GigaChatClient(_make_settings())
@@ -511,13 +512,115 @@ class TestAttachmentUploadDiagnostics:
 
         monkeypatch.setattr(client, "_get_http", fake_get_http)
 
+        with pytest.raises(AuthExpiredError) as exc_info:
+            await client._upload_file("otr-1", Path(file_path), "text/plain")
+
+        # Subclass of GigaChatError so existing handlers keep working.
+        assert isinstance(exc_info.value, GigaChatError)
+        message = str(exc_info.value)
+        assert "_sm_sess" in message
+        assert "GIGACHAT_COOKIES" in message
+        assert "DevTools" in message
+
+    @pytest.mark.asyncio
+    async def test_upload_file_non_auth_error_still_raises_gigachat_error(self, tmp_path, monkeypatch):
+        file_path = tmp_path / "sample.txt"
+        file_path.write_text("hello")
+        client = GigaChatClient(_make_settings())
+
+        class FakeHTTP:
+            async def post(self, *args, **kwargs):
+                return httpx.Response(
+                    500,
+                    text="server boom",
+                    request=httpx.Request("POST", "https://giga.chat/upload"),
+                )
+
+        async def fake_get_http():
+            return FakeHTTP()
+
+        monkeypatch.setattr(client, "_get_http", fake_get_http)
+
         with pytest.raises(GigaChatError) as exc_info:
             await client._upload_file("otr-1", Path(file_path), "text/plain")
 
-        error_message = str(exc_info.value)
-        assert "refresh GIGACHAT_COOKIES" in error_message
-        assert "Keep HAR files private" in error_message
-        assert "redact cookies" in error_message
+        assert "server boom" in str(exc_info.value)
+        assert not isinstance(exc_info.value, AuthExpiredError)
+
+
+class TestSearchAuthMapping:
+    @pytest.mark.asyncio
+    async def test_search_raises_auth_expired_on_401(self, monkeypatch):
+        client = GigaChatClient(_make_settings())
+
+        class FakeResponse:
+            status_code = 401
+            headers = {"content-type": "application/json"}
+            text = '{"message":"Unauthorized"}'
+
+            async def aread(self):
+                return None
+
+            def json(self):
+                return {"message": "Unauthorized"}
+
+        class FakeStreamCM:
+            async def __aenter__(self):
+                return FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        class FakeHTTP:
+            def stream(self, *args, **kwargs):
+                return FakeStreamCM()
+
+        async def fake_get_http():
+            return FakeHTTP()
+
+        monkeypatch.setattr(client, "_get_http", fake_get_http)
+
+        with pytest.raises(AuthExpiredError) as exc_info:
+            await client.search("hello", SearchMode.ASK)
+
+        assert isinstance(exc_info.value, GigaChatError)
+        message = str(exc_info.value)
+        assert "GIGACHAT_COOKIES" in message
+        assert "DevTools" in message
+
+    @pytest.mark.asyncio
+    async def test_search_raises_auth_expired_on_expired_token_body(self, monkeypatch):
+        client = GigaChatClient(_make_settings())
+
+        class FakeResponse:
+            status_code = 400
+            headers = {"content-type": "application/json"}
+            text = '{"message":"The Token has expired"}'
+
+            async def aread(self):
+                return None
+
+            def json(self):
+                return {"message": "The Token has expired"}
+
+        class FakeStreamCM:
+            async def __aenter__(self):
+                return FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        class FakeHTTP:
+            def stream(self, *args, **kwargs):
+                return FakeStreamCM()
+
+        async def fake_get_http():
+            return FakeHTTP()
+
+        monkeypatch.setattr(client, "_get_http", fake_get_http)
+
+        with pytest.raises(AuthExpiredError):
+            await client.search("hello", SearchMode.ASK)
 
 
 class TestResearchDedup:

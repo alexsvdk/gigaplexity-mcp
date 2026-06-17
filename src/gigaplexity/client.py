@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 import json
 import logging
 import math
 import mimetypes
 import re
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 
 from gigaplexity.config import GigaplexitySettings
+from gigaplexity.errors import (
+    AuthExpiredError,
+    GigaChatError,
+    is_auth_expired_response,
+)
 from gigaplexity.models import (
     AttachmentInfo,
     Citation,
@@ -26,13 +31,13 @@ from gigaplexity.models import (
     build_request_payload,
     resolve_file_type,
 )
+from gigaplexity.preflight import PreflightResult, run_preflight
 
 logger = logging.getLogger(__name__)
 
 
 def _get_audio_duration(path: Path) -> float | None:
     """Try to determine audio duration in seconds (best-effort for WAV)."""
-    import struct
     import wave
 
     try:
@@ -45,9 +50,6 @@ def _get_audio_duration(path: Path) -> float | None:
         pass
     return None
 
-
-class GigaChatError(Exception):
-    """Raised when the GigaChat API returns an error."""
 
 REQUEST_ENDPOINT = "/api/giga-back-web/api/v0/sessions/request"
 OTR_ENDPOINT = "/api/attachments/api/v0/gc/otr"
@@ -235,6 +237,14 @@ class GigaChatClient:
             await self._http.aclose()
             self._http = None
 
+    async def preflight(self) -> PreflightResult:
+        """Run a one-shot auth check against ``GET /api/check``.
+
+        Wraps :func:`run_preflight` using this client's settings and the
+        shared ``httpx.AsyncClient`` (creating it on demand). Never raises.
+        """
+        return await run_preflight(self.settings, http=await self._get_http())
+
     def _new_request_id(self) -> str:
         return str(uuid.uuid4())
 
@@ -256,6 +266,10 @@ class GigaChatClient:
             headers=headers,
         )
         if resp.status_code != 201:
+            if is_auth_expired_response(resp.status_code, resp.text):
+                raise AuthExpiredError(
+                    f"Failed to create OTR (HTTP {resp.status_code}): {resp.text[:300]}"
+                )
             raise GigaChatError(
                 f"Failed to create OTR (HTTP {resp.status_code}): {resp.text[:300]}"
             )
@@ -295,18 +309,12 @@ class GigaChatClient:
 
         if resp.status_code != 201:
             error_snippet = resp.text[:300]
-            extra_hint = ""
-            if "GC-ATT-E005" in resp.text or "token has expired" in resp.text.lower():
-                extra_hint = (
-                    " Attachment upload token is expired; refresh GIGACHAT_COOKIES "
-                    "from a logged-in browser session. If it still fails, capture a "
-                    "fresh HAR while uploading a file because the attachments upload "
-                    "flow may require additional browser-issued tokens. Keep HAR files "
-                    "private and redact cookies, authorization headers, and tokens before "
-                    "sharing them."
+            if is_auth_expired_response(resp.status_code, resp.text):
+                raise AuthExpiredError(
+                    f"Failed to upload file (HTTP {resp.status_code}): {error_snippet}"
                 )
             raise GigaChatError(
-                f"Failed to upload file (HTTP {resp.status_code}): {error_snippet}{extra_hint}"
+                f"Failed to upload file (HTTP {resp.status_code}): {error_snippet}"
             )
         return resp.json()
 
@@ -426,6 +434,10 @@ class GigaChatClient:
                     )
                 except Exception:
                     error_msg = response.text[:500]
+                if is_auth_expired_response(response.status_code, response.text):
+                    raise AuthExpiredError(
+                        f"API error (HTTP {response.status_code}): {error_msg}"
+                    )
                 raise GigaChatError(
                     f"API error (HTTP {response.status_code}): {error_msg}"
                 )

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from mcp.server.fastmcp import Context, FastMCP
 
 from gigaplexity.client import GigaChatClient
 from gigaplexity.config import load_settings
+from gigaplexity.errors import AuthExpiredError
 from gigaplexity.models import SearchMode
 
 logger = logging.getLogger(__name__)
@@ -18,13 +20,33 @@ mcp = FastMCP(
 )
 
 _client: GigaChatClient | None = None
+_preflight_lock = asyncio.Lock()
 
 
-def _get_client() -> GigaChatClient:
+async def _get_client() -> GigaChatClient:
     global _client
-    if _client is None:
-        settings = load_settings()
-        _client = GigaChatClient(settings)
+    async with _preflight_lock:
+        if _client is None:
+            settings = load_settings()
+            _client = GigaChatClient(settings)
+
+            if settings.preflight_on_start:
+                logger.info("Running GigaChat auth preflight check")
+                result = await _client.preflight()
+                if result.should_refresh:
+                    logger.warning(
+                        "Preflight requires cookie refresh: reason=%s detail=%s",
+                        result.reason,
+                        result.detail,
+                    )
+                    raise AuthExpiredError(result.detail)
+                if not result.ok:
+                    # Network/other soft failure — log but don't block startup.
+                    logger.warning(
+                        "Preflight could not confirm auth: reason=%s detail=%s",
+                        result.reason,
+                        result.detail,
+                    )
     return _client
 
 
@@ -51,7 +73,7 @@ async def ask(
     Returns:
         Answer text with source citations in markdown format.
     """
-    client = _get_client()
+    client = await _get_client()
     attachments = None
     if file_paths:
         attachments = await client.upload_files(file_paths)
@@ -90,7 +112,7 @@ async def research(
     Returns:
         Detailed research report in markdown with citations and research log.
     """
-    client = _get_client()
+    client = await _get_client()
 
     async def on_progress(progress: float, message: str) -> None:
         if ctx:
@@ -120,7 +142,7 @@ async def reason(query: str, ctx: Context | None = None) -> str:
     Returns:
         Reasoned answer with thinking steps and citations in markdown format.
     """
-    client = _get_client()
+    client = await _get_client()
 
     async def on_progress(progress: float, message: str) -> None:
         if ctx:

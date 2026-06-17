@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
-from base64 import b64decode
 
 import httpx
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
+from gigaplexity.jwt_utils import decode_jwt_payload
 from gigaplexity.user_agent import generate_user_agent
 
 _PROFILE_URL = "https://giga.chat/api/profile/api/v0/mobile/init"
@@ -28,20 +27,6 @@ def _parse_cookie(cookies: str, name: str) -> str | None:
     return None
 
 
-def _decode_jwt_payload(token: str) -> dict:
-    """Decode JWT payload without verification."""
-    parts = token.split(".")
-    if len(parts) != 3:
-        return {}
-    payload = parts[1]
-    # Fix base64 padding
-    payload += "=" * (-len(payload) % 4)
-    try:
-        return json.loads(b64decode(payload))
-    except Exception:
-        return {}
-
-
 def _extract_user_id(cookies: str | None, sm_sess: str | None) -> str | None:
     """Extract user_id from JWT 'usr' field in _sm_sess cookie."""
     token = sm_sess
@@ -49,7 +34,7 @@ def _extract_user_id(cookies: str | None, sm_sess: str | None) -> str | None:
         token = _parse_cookie(cookies, "_sm_sess")
     if not token:
         return None
-    payload = _decode_jwt_payload(token)
+    payload = decode_jwt_payload(token)
     return payload.get("usr")
 
 
@@ -123,6 +108,10 @@ class GigaplexitySettings(BaseSettings):
     sticky_dp: str | None = None
     sticky_km: str | None = None
     bp_challenge: str | None = None
+
+    # Preflight auth check (see preflight.py)
+    preflight_on_start: bool = True
+    preflight_skew_seconds: int = 60
 
     @model_validator(mode="after")
     def _resolve_from_cookies(self) -> GigaplexitySettings:
