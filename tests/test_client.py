@@ -1,10 +1,18 @@
 """Unit tests for GigaChat client (mocked HTTP)."""
 
 import json
+from pathlib import Path
 
+import httpx
 import pytest
 
-from gigaplexity.client import GigaChatClient, _EventMetrics, _StreamingProgressTracker
+import gigaplexity.config as config
+from gigaplexity.client import (
+    GigaChatClient,
+    GigaChatError,
+    _EventMetrics,
+    _StreamingProgressTracker,
+)
 from gigaplexity.config import GigaplexitySettings
 from gigaplexity.models import SearchMode
 
@@ -39,8 +47,38 @@ class TestClientConfig:
         assert headers["x-request-id"] == "req-123"
         assert headers["x-project-id"] == "test-project-id"
         assert headers["x-sm-user-id"] == "test-user-id"
-        assert headers["X-Application-Name"] == "gigachat-b2c-web"
+        assert headers["X-Application-Name"] == "gigachat-b2c-web-neo"
+        assert headers["X-Application-Version"] == "0.2.10"
         assert "text/event-stream" in headers["Accept"]
+
+    def test_attachment_headers_can_omit_content_type_for_multipart(self):
+        settings = _make_settings()
+        headers = settings.build_attachments_headers("req-456", multipart=True)
+        assert headers["Accept"] == "application/json, text/plain, */*"
+        assert "Content-Type" not in headers
+
+    def test_profile_fetch_uses_configured_app_identity(self, monkeypatch):
+        captured = {}
+
+        def fake_fetch_gigachat_id(cookie_string, *, app_name, app_version):
+            captured["cookie_string"] = cookie_string
+            captured["app_name"] = app_name
+            captured["app_version"] = app_version
+            return "fetched-project-id"
+
+        monkeypatch.setattr(config, "_fetch_gigachat_id", fake_fetch_gigachat_id)
+
+        settings = GigaplexitySettings(
+            sm_sess="test-jwt-token",
+            user_id="test-user-id",
+            app_name="custom-app",
+            app_version="9.9.9",
+        )
+
+        assert settings.project_id == "fetched-project-id"
+        assert captured["app_name"] == "custom-app"
+        assert captured["app_version"] == "9.9.9"
+        assert "_sm_sess=test-jwt-token" in captured["cookie_string"]
 
     def test_cookie_string_from_individual(self):
         settings = _make_settings()
@@ -54,6 +92,24 @@ class TestClientConfig:
 
 
 class TestSSEParsing:
+    def test_process_accepted_session_id(self):
+        client = GigaChatClient(_make_settings())
+        from gigaplexity.models import SearchResult
+
+        result = SearchResult(text="")
+        client._process_event(
+            json.dumps(
+                {
+                    "status": "ACCEPTED",
+                    "sessionId": "server-session-1",
+                    "message": {"id": "message-1"},
+                }
+            ),
+            result,
+        )
+        assert result.session_id == "server-session-1"
+        assert result.message_id == "message-1"
+
     def test_process_delta_text(self):
         client = GigaChatClient(_make_settings())
         from gigaplexity.models import SearchResult
@@ -433,6 +489,35 @@ class TestResearchCleanup:
         assert result.text.startswith("# Final heading")
         assert "<details" not in result.text.lower()
         assert "Conducting initial research on the following query:" not in result.text
+
+
+class TestAttachmentUploadDiagnostics:
+    @pytest.mark.asyncio
+    async def test_upload_file_expired_token_hint(self, tmp_path, monkeypatch):
+        file_path = tmp_path / "sample.txt"
+        file_path.write_text("hello")
+        client = GigaChatClient(_make_settings())
+
+        class FakeHTTP:
+            async def post(self, *args, **kwargs):
+                return httpx.Response(
+                    401,
+                    text='{"code":"GC-ATT-E005","message":"The Token has expired"}',
+                    request=httpx.Request("POST", "https://giga.chat/upload"),
+                )
+
+        async def fake_get_http():
+            return FakeHTTP()
+
+        monkeypatch.setattr(client, "_get_http", fake_get_http)
+
+        with pytest.raises(GigaChatError) as exc_info:
+            await client._upload_file("otr-1", Path(file_path), "text/plain")
+
+        error_message = str(exc_info.value)
+        assert "refresh GIGACHAT_COOKIES" in error_message
+        assert "Keep HAR files private" in error_message
+        assert "redact cookies" in error_message
 
 
 class TestResearchDedup:

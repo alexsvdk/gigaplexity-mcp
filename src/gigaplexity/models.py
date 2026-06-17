@@ -99,7 +99,7 @@ AGENT_IDS: dict[SearchMode, str] = {
 
 # Model names for each mode
 MODEL_NAMES: dict[SearchMode, str | None] = {
-    SearchMode.ASK: None,  # Server defaults to GigaChat-3-Ultra
+    SearchMode.ASK: "GigaChat-3-Ultra",
     SearchMode.RESEARCH: "GigaChat-3-Ultra",
     SearchMode.REASON: "GigaChat-2-Reasoning",
 }
@@ -159,7 +159,7 @@ class SearchResult:
 def build_request_payload(
     query: str,
     mode: SearchMode,
-    session_id: str,
+    session_id: str | None = None,
     *,
     domains: list[str] | None = None,
     extended_research: bool = False,
@@ -170,9 +170,10 @@ def build_request_payload(
     payload: dict = {
         "text": query,
         "agent": AGENT_IDS[mode],
-        "sessionId": session_id,
-        "featureFlags": [],
     }
+
+    if session_id:
+        payload["sessionId"] = session_id
 
     model = MODEL_NAMES[mode]
     if model:

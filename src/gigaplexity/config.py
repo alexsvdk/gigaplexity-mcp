@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from base64 import b64decode
 
 import httpx
@@ -13,6 +14,8 @@ from pydantic_settings import BaseSettings
 from gigaplexity.user_agent import generate_user_agent
 
 _PROFILE_URL = "https://giga.chat/api/profile/api/v0/mobile/init"
+DEFAULT_APP_NAME = "gigachat-b2c-web-neo"
+DEFAULT_APP_VERSION = "0.2.10"
 logger = logging.getLogger(__name__)
 
 
@@ -50,12 +53,27 @@ def _extract_user_id(cookies: str | None, sm_sess: str | None) -> str | None:
     return payload.get("usr")
 
 
-def _fetch_gigachat_id(cookie_string: str) -> str | None:
+def _fetch_gigachat_id(
+    cookie_string: str,
+    *,
+    app_name: str = DEFAULT_APP_NAME,
+    app_version: str = DEFAULT_APP_VERSION,
+) -> str | None:
     """Fetch gigachatId (project_id) from profile API."""
     try:
         resp = httpx.post(
             _PROFILE_URL,
-            headers={"Cookie": cookie_string, "Content-Type": "application/json"},
+            headers={
+                "Accept": "application/json",
+                "Cookie": cookie_string,
+                "Content-Type": "application/json",
+                "Origin": "https://giga.chat",
+                "Referer": "https://giga.chat/",
+                "X-Application-Name": app_name,
+                "X-Application-Version": app_version,
+                "X-Request-Id": str(uuid.uuid4()),
+            },
+            json={},
             timeout=10,
         )
         resp.raise_for_status()
@@ -96,7 +114,8 @@ class GigaplexitySettings(BaseSettings):
     # Optional
     user_agent: str = "random"
     base_url: str = "https://giga.chat"
-    app_version: str = "0.94.11"
+    app_version: str = DEFAULT_APP_VERSION
+    app_name: str = DEFAULT_APP_NAME
     language: str = "en"
     timezone: str = "UTC"
 
@@ -126,7 +145,11 @@ class GigaplexitySettings(BaseSettings):
         # project_id from profile API
         if not self.project_id:
             cookie_str = self.cookies or self.build_cookie_string()
-            giga_id = _fetch_gigachat_id(cookie_str)
+            giga_id = _fetch_gigachat_id(
+                cookie_str,
+                app_name=self.app_name,
+                app_version=self.app_version,
+            )
             if giga_id:
                 self.project_id = giga_id
             else:
@@ -176,22 +199,51 @@ class GigaplexitySettings(BaseSettings):
             parts.append(f"bp_challenge={self.bp_challenge}")
         return "; ".join(parts)
 
-    def build_headers(self, request_id: str) -> dict[str, str]:
+    def build_headers(
+        self,
+        request_id: str,
+        *,
+        accept: str = "text/event-stream, application/json",
+        content_type: str | None = "application/json",
+    ) -> dict[str, str]:
         """Build common request headers."""
-        return {
-            "Accept": "text/event-stream, application/json",
-            "Content-Type": "application/json",
+        headers = {
+            "Accept": accept,
             "Cookie": self.build_cookie_string(),
             "Origin": self.base_url,
             "Referer": f"{self.base_url}/",
             "User-Agent": self.user_agent,
-            "X-Application-Name": "gigachat-b2c-web",
+            "X-Application-Name": self.app_name,
             "X-Application-Version": self.app_version,
             "X-User-Timezone": self.timezone,
             "x-request-id": request_id,
             "x-project-id": self.project_id,  # type: ignore[dict-item]
             "x-sm-user-id": self.user_id,  # type: ignore[dict-item]
         }
+        if content_type:
+            headers["Content-Type"] = content_type
+        return headers
+
+    def build_back_web_headers(self, request_id: str) -> dict[str, str]:
+        """Build headers for GigaChat back-web SSE requests."""
+        return self.build_headers(
+            request_id,
+            accept="text/event-stream, application/json",
+            content_type="application/json",
+        )
+
+    def build_attachments_headers(
+        self,
+        request_id: str,
+        *,
+        multipart: bool = False,
+    ) -> dict[str, str]:
+        """Build headers for attachments OTR and upload requests."""
+        return self.build_headers(
+            request_id,
+            accept="application/json, text/plain, */*",
+            content_type=None if multipart else "application/json",
+        )
 
 
 def load_settings() -> GigaplexitySettings:
